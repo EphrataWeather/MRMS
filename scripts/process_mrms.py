@@ -8,14 +8,18 @@ import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from flask import Flask, jsonify, send_from_directory, request
+
+app = Flask(__name__)
 
 # --- Configuration ---
 DATA_DIR = "mrms_data"
 IMG_DIR = "static/images"
 BASE_URL = "https://mrms.ncep.noaa.gov/data/2D"
 
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(IMG_DIR, exist_ok=True)
+for d in [DATA_DIR, IMG_DIR]:
+    if not os.path.exists(d):
+        os.makedirs(d)
 
 PRODUCTS = {
     "reflectivity": {
@@ -33,48 +37,37 @@ PRODUCTS = {
 }
 
 def get_latest_file_urls(product_key, limit=10):
-    """Robustly scrapes the NOAA directory for the latest files."""
     prod = PRODUCTS[product_key]
     idx_url = f"{BASE_URL}/{prod['url']}/"
-    
     headers = {'User-Agent': 'Mozilla/5.0 MRMS-Viewer-App/1.0'}
     
     try:
-        r = requests.get(idx_url, headers=headers, timeout=15)
+        r = requests.get(idx_url, headers=headers, timeout=10)
         if r.status_code != 200:
             return []
         
-        # Matches the filename pattern within the HTML index
         pattern = re.compile(rf'href="({prod["prefix"]}.*?\.grib2\.gz)"')
-        all_files = list(set(pattern.findall(r.text)))
-        
-        if not all_files:
-            return []
-
-        # Sort by timestamp (contained in filename) and take the newest
-        all_files.sort()
+        all_files = sorted(list(set(pattern.findall(r.text))))
         return [f"{idx_url}{f}" for f in all_files[-limit:]]
     except Exception as e:
-        print(f"Scraping error: {e}")
+        print(f"Scraper Error: {e}")
         return []
 
 def process_grib_to_png(grib_path, out_path, product_key):
-    """Decodes GRIB2 data and exports a transparent map layer."""
     try:
         unzipped = grib_path.replace(".gz", "")
         with gzip.open(grib_path, 'rb') as f_in, open(unzipped, 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
 
-        # Open dataset (requires cfgrib and eccodes)
+        # Requires cfgrib and eccodes installed
         ds = xr.open_dataset(unzipped, engine='cfgrib')
         var_name = list(ds.data_vars)[0]
         data = ds[var_name].values
         
-        # Clean up binary data: convert 'no coverage' values to NaN
         prod = PRODUCTS[product_key]
         data = np.where(data < prod['vmin'], np.nan, data)
 
-        plt.figure(figsize=(12, 12), frameon=False)
+        plt.figure(figsize=(10, 10), frameon=False)
         ax = plt.Axes(plt.gcf(), [0, 0, 1, 1])
         ax.set_axis_off()
         plt.gcf().add_axes(ax)
@@ -86,40 +79,49 @@ def process_grib_to_png(grib_path, out_path, product_key):
                   norm=mcolors.Normalize(vmin=prod['vmin'], vmax=prod['vmax']), 
                   aspect='auto')
         
-        plt.savefig(out_path, format='png', transparent=True, dpi=150)
+        plt.savefig(out_path, format='png', transparent=True, dpi=100)
         plt.close()
-        os.remove(unzipped) # Clean up unzipped GRIB
+        if os.path.exists(unzipped): os.remove(unzipped)
         return True
     except Exception as e:
-        print(f"Error processing {grib_path}: {e}")
+        print(f"GRIB processing failed: {e}")
         return False
 
-def main():
-    """Main execution loop for GitHub Actions or Local Cron."""
-    for p_key in PRODUCTS:
-        print(f"Fetching latest files for: {p_key}")
-        urls = get_latest_file_urls(p_key, limit=10)
-        
-        if not urls:
-            print(f"Skipping {p_key}: No files found on server.")
-            continue
+@app.route('/')
+def index():
+    return send_from_directory('.', 'index.html')
 
-        for url in urls:
-            filename = url.split('/')[-1]
-            local_gz = os.path.join(DATA_DIR, filename)
-            img_name = filename.replace('.grib2.gz', '.png')
-            local_img = os.path.join(IMG_DIR, img_name)
+@app.route('/get_frames')
+def get_frames():
+    p_type = request.args.get('type', 'reflectivity')
+    if p_type not in PRODUCTS:
+        return jsonify({"error": "Invalid product type"}), 400
 
-            if not os.path.exists(local_img):
-                print(f"Downloading & Processing {filename}...")
-                r = requests.get(url)
-                with open(local_gz, 'wb') as f:
-                    f.write(r.content)
-                
-                success = process_grib_to_png(local_gz, local_img, p_key)
-                if success:
-                    # Optional: remove raw gz after processing to save space
-                    os.remove(local_gz)
+    urls = get_latest_file_urls(p_type, limit=10)
+    frames = []
 
-if __name__ == "__main__":
-    main()
+    for url in urls:
+        fname = url.split('/')[-1]
+        local_gz = os.path.join(DATA_DIR, fname)
+        img_name = fname.replace('.grib2.gz', '.png')
+        local_img = os.path.join(IMG_DIR, img_name)
+
+        if not os.path.exists(local_img):
+            r = requests.get(url)
+            with open(local_gz, 'wb') as f:
+                f.write(r.content)
+            process_grib_to_png(local_gz, local_img, p_type)
+            if os.path.exists(local_gz): os.remove(local_gz)
+
+        if os.path.exists(local_img):
+            ts = fname.split('_')[-1].split('.')[0]
+            frames.append({
+                "url": f"/static/images/{img_name}",
+                "bounds": [[20.0, -130.0], [55.0, -60.0]], # Standard CONUS MRMS bounds
+                "time": ts
+            })
+
+    return jsonify(frames)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
