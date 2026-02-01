@@ -1,117 +1,85 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Live MRMS Viewer</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MRMS Tiled Radar</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; background: #111; font-family: sans-serif; color: white; }
+        body, html { margin: 0; padding: 0; height: 100%; background: #111; font-family: sans-serif; }
         #map { height: 100vh; width: 100%; }
-        #controls {
-            position: absolute; top: 15px; right: 15px; z-index: 1000;
-            background: rgba(20, 20, 20, 0.9); padding: 20px; border-radius: 8px;
-            width: 250px; border: 1px solid #333;
+        .radar-tile { 
+            image-rendering: pixelated; 
+            image-rendering: crisp-edges;
+            pointer-events: none !important;
         }
-        select, button { width: 100%; padding: 10px; margin: 8px 0; border-radius: 4px; border: none; cursor: pointer; }
-        button { background: #007bff; color: white; font-weight: bold; }
-        #time-display { text-align: center; font-family: monospace; font-size: 1.2em; color: #00ffcc; margin: 10px 0; }
-        .slider { width: 100%; margin: 10px 0; }
+        .ui-box {
+            position: absolute; top: 20px; right: 20px;
+            background: rgba(0,0,0,0.85); color: white;
+            padding: 15px; border-radius: 8px; z-index: 1000;
+            border: 1px solid #444; pointer-events: none;
+        }
     </style>
 </head>
 <body>
+    <div class="ui-box">
+        <h3 style="margin:0;">Live MRMS Radar</h3>
+        <div id="timestamp" style="font-size: 12px; color: #aaa;">Syncing...</div>
+    </div>
+    <div id="map"></div>
 
-<div id="controls">
-    <div id="status" style="font-size: 0.8em; color: #aaa;">Status: Ready</div>
-    <select id="prodSelect" onchange="loadManifest()">
-        <option value="reflectivity">Radar Reflectivity</option>
-        <option value="precip">Precipitation Rate</option>
-    </select>
-    <div id="time-display">--:--:--</div>
-    <input type="range" id="scrubber" class="slider" min="0" max="0" value="0" oninput="showFrame(this.value)">
-    <button id="playBtn" onclick="togglePlay()">Play Loop</button>
-</div>
-
-<div id="map"></div>
-
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-    const map = L.map('map').setView([38, -95], 4);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-
-    let currentManifest = null;
-    let mapLayers = [];
-    let currentIndex = 0;
-    let playTimer = null;
-
-    async function loadManifest() {
-        const status = document.getElementById('status');
-        status.innerText = "Status: Loading Manifest...";
-        
-        try {
-            // Fetch the static JSON file created by GitHub Actions
-            const response = await fetch('manifest.json?t=' + Date.now()); // Prevent caching
-            currentManifest = await response.json();
-            
-            updateMapLayers();
-            status.innerText = "Status: Data Updated";
-        } catch (e) {
-            status.innerText = "Status: Error loading data";
-            console.error("Manifest error:", e);
-        }
-    }
-
-    function updateMapLayers() {
-        const type = document.getElementById('prodSelect').value;
-        const frames = currentManifest[type];
-
-        // Clear existing layers
-        mapLayers.forEach(l => map.removeLayer(l));
-        mapLayers = [];
-
-        if (!frames || frames.length === 0) return;
-
-        // Create new layers (all hidden initially)
-        frames.forEach(f => {
-            const layer = L.imageOverlay(f.url, f.bounds, { opacity: 0 });
-            layer.addTo(map);
-            mapLayers.push(layer);
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const map = L.map('map', { 
+            center: [38, -97], 
+            zoom: 4, 
+            minZoom: 3, 
+            zoomSnap: 0.1 
         });
 
-        document.getElementById('scrubber').max = frames.length - 1;
-        showFrame(frames.length - 1); // Show latest
-    }
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; CARTO'
+        }).addTo(map);
 
-    function showFrame(idx) {
-        currentIndex = parseInt(idx);
-        const type = document.getElementById('prodSelect').value;
-        const frames = currentManifest[type];
+        let radarGroup = L.layerGroup().addTo(map);
 
-        mapLayers.forEach((layer, i) => {
-            layer.setOpacity(i == currentIndex ? 0.8 : 0);
-        });
+        async function updateRadar() {
+            try {
+                const res = await fetch(`data/metadata.json?t=${Date.now()}`);
+                const data = await res.json();
+                const latest = data.latest;
 
-        const timeStr = frames[currentIndex].time; // e.g., 20260201-175000
-        const timeFormatted = timeStr.split('-')[1].match(/.{1,2}/g).join(':') + " Z";
-        document.getElementById('time-display').innerText = timeFormatted;
-        document.getElementById('scrubber').value = currentIndex;
-    }
+                const latMin = latest.bounds[0][0];
+                const lonMin = latest.bounds[0][1];
+                const latMax = latest.bounds[1][0];
+                const lonMax = latest.bounds[1][1];
 
-    function togglePlay() {
-        const btn = document.getElementById('playBtn');
-        if (playTimer) {
-            clearInterval(playTimer);
-            playTimer = null;
-            btn.innerText = "Play Loop";
-        } else {
-            btn.innerText = "Stop Loop";
-            playTimer = setInterval(() => {
-                currentIndex = (currentIndex + 1) % mapLayers.length;
-                showFrame(currentIndex);
-            }, 600);
+                const latRange = latMax - latMin;
+                const lonRange = lonMax - lonMin;
+
+                radarGroup.clearLayers();
+
+                latest.tiles.forEach(tile => {
+                    // Precision math to place tiles
+                    const tNorth = latMax - (tile.row * (latRange / 4));
+                    const tSouth = latMax - ((tile.row + 1) * (latRange / 4));
+                    const tWest = lonMin + (tile.col * (lonRange / 4));
+                    const tEast = lonMin + ((tile.col + 1) * (lonRange / 4));
+
+                    L.imageOverlay(tile.url + `?t=${Date.now()}`, [[tSouth, tWest], [tNorth, tEast]], {
+                        opacity: 0.75,
+                        className: 'radar-tile'
+                    }).addTo(radarGroup);
+                });
+
+                document.getElementById('timestamp').innerText = "Valid: " + latest.time;
+            } catch (e) {
+                console.error("Update error:", e);
+            }
         }
-    }
 
-    // Initial load
-    loadManifest();
-</script>
+        updateRadar();
+        setInterval(updateRadar, 120000);
+    </script>
 </body>
 </html>
