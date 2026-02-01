@@ -92,7 +92,7 @@
         // Bounds come as [[minLat, minLon], [maxLat, maxLon]], Leaflet wants [[minLat, minLon], [maxLat, maxLon]] order check
         // MRMS usually covers top-left to bottom-right, we ensure correct bounds
         // Note: Python script calculated min/max, so we are safe.
-        const bounds = [[frame.bounds[0][0], frame.bounds[0][1]], [frame.bounds[1][0], frame.bounds[1][1]]];
+       const bounds = [[frame.bounds[0][0], frame.bounds[0][1]], [frame.bounds[1][0], frame.bounds[1][1]]];
         
         currentLayer = L.imageOverlay(frame.url, bounds, {opacity: 0.8}).addTo(map);
 
