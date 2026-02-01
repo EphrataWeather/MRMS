@@ -1,10 +1,9 @@
-name: Update MRMS Data
+name: Update MRMS Radar
 
 on:
   schedule:
-    # Run every 15 minutes (MRMS updates frequently, but Github Actions has limits)
-    - cron: '*/15 * * * *'
-  workflow_dispatch: # Allows manual trigger
+    - cron: '*/20 * * * *' # Run every 20 minutes
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,7 +15,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install System Dependencies (eccodes)
+      - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libeccodes-dev
@@ -37,5 +36,4 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./public
-          # Warning: This overwrites the gh-pages branch. 
-          # Ensure your source code is in 'main' and site is served from 'gh-pages'
+          force_orphan: true
