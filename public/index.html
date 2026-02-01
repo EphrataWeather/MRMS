@@ -1,99 +1,99 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>MRMS Precip Type</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-
-<style>
-html, body, #map { height:100%; margin:0; background:#111 }
-.controls {
-  position:absolute;
-  bottom:20px;
-  left:50%;
-  transform:translateX(-50%);
-  background:rgba(0,0,0,.85);
-  color:white;
-  padding:12px;
-  border-radius:8px;
-  display:flex;
-  gap:10px;
-  align-items:center;
-  z-index:1000;
-}
-input[type=range] { width:160px }
-</style>
+    <title>Live P-Type Radar</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; background: #111; font-family: sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        .controls {
+            position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+            z-index: 1000; background: rgba(0,0,0,0.9); padding: 15px;
+            border-radius: 30px; display: flex; align-items: center; gap: 20px; color: white;
+            border: 1px solid #444;
+        }
+        .legend {
+            position: absolute; top: 20px; left: 20px; z-index: 1000;
+            background: rgba(0,0,0,0.8); padding: 10px; border-radius: 5px; color: white; font-size: 12px;
+        }
+        input[type=range] { width: 200px; cursor: pointer; }
+        button { background: #333; color: white; border: 1px solid #555; padding: 5px 15px; border-radius: 15px; cursor: pointer; }
+        button:hover { background: #555; }
+    </style>
 </head>
-
 <body>
-<div id="map"></div>
+    <div class="legend">
+        <div style="display:flex; align-items:center; gap:5px;"><span style="width:12px;height:12px;background:#00ff00;display:block"></span> Rain</div>
+        <div style="display:flex; align-items:center; gap:5px;"><span style="width:12px;height:12px;background:#ff00ff;display:block"></span> Mix</div>
+        <div style="display:flex; align-items:center; gap:5px;"><span style="width:12px;height:12px;background:#00ccff;display:block"></span> Snow</div>
+    </div>
+    <div class="controls">
+        <button id="playBtn" onclick="togglePlay()">Play</button>
+        <input type="range" id="loopSlider" min="0" max="4" value="0" oninput="setFrame(this.value)">
+        <span id="timeLabel">Live</span>
+    </div>
+    <div id="map"></div>
 
-<div class="controls">
-  <button id="play">▶</button>
-  <input id="slider" type="range" min="0" max="4" value="0">
-  <span id="time">--</span>
-</div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const map = L.map('map').setView([38, -97], 4);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-const map = L.map("map", { center:[38,-97], zoom:4 });
-L.tileLayer(
-  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
-).addTo(map);
+        let radarLayers = [L.layerGroup(), L.layerGroup(), L.layerGroup(), L.layerGroup(), L.layerGroup()];
+        radarLayers.forEach(l => l.addTo(map));
 
-let scans = [];
-let layerGroup = L.layerGroup().addTo(map);
-let frame = 0;
-let playing = false;
+        let isPlaying = false;
+        let loopTimer;
 
-fetch("data/metadata.json")
-.then(r=>r.json())
-.then(data=>{
-  scans = data;
-  document.getElementById("slider").max = scans.length-1;
-  render(0);
-});
+        async function loadFrames() {
+            for(let i=0; i<5; i++) {
+                try {
+                    const r = await fetch(`data/metadata_${i}.json?t=${Date.now()}`);
+                    const d = await r.json();
+                    renderFrame(d, i);
+                } catch(e) { console.log("Frame " + i + " not ready yet"); }
+            }
+            setFrame(0); // Start at live
+        }
 
-function render(i){
-  layerGroup.clearLayers();
-  const s = scans[i];
-  const [[lat1, lon1],[lat2, lon2]] = s.bounds;
-  document.getElementById("time").innerText = s.time;
+        function renderFrame(data, idx) {
+            radarLayers[idx].clearLayers();
+            const [s, w] = data.bounds[0];
+            const [n, e] = data.bounds[1];
+            const latR = n - s; const lonR = e - w;
 
-  s.tiles.forEach(t=>{
-    const latStep = (lat2-lat1)/4;
-    const lonStep = (lon2-lon1)/4;
+            data.tiles.forEach(t => {
+                const ts = n - ((t.row + 1) * (latR / 4));
+                const tn = n - (t.row * (latR / 4));
+                const tw = w + (t.col * (lonR / 4));
+                const te = w + ((t.col + 1) * (lonR / 4));
+                L.imageOverlay(t.url, [[ts, tw], [tn, te]], {opacity: 0.8}).addTo(radarLayers[idx]);
+            });
+        }
 
-    const south = lat2 - (t.row+1)*latStep;
-    const north = lat2 - t.row*latStep;
-    const west = lon1 + t.col*lonStep;
-    const east = lon1 + (t.col+1)*lonStep;
+        function setFrame(val) {
+            radarLayers.forEach((l, i) => l.setZIndex(i == val ? 100 : 0));
+            radarLayers.forEach((l, i) => {
+                 const opacity = (i == val) ? 0.8 : 0;
+                 l.eachLayer(layer => layer.setOpacity(opacity));
+            });
+            document.getElementById('timeLabel').innerText = val == 0 ? "Live" : `-${val * 10}m`;
+        }
 
-    L.imageOverlay(
-      `data/${s.path}/${t.url}`,
-      [[south, west],[north, east]],
-      { opacity:.85 }
-    ).addTo(layerGroup);
-  });
-}
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            document.getElementById('playBtn').innerText = isPlaying ? "Pause" : "Play";
+            if(isPlaying) {
+                let cur = 4;
+                loopTimer = setInterval(() => {
+                    setFrame(cur);
+                    document.getElementById('loopSlider').value = cur;
+                    cur = cur <= 0 ? 4 : cur - 1;
+                }, 600);
+            } else { clearInterval(loopTimer); }
+        }
 
-document.getElementById("slider").oninput = e=>{
-  frame = +e.target.value;
-  render(frame);
-};
-
-document.getElementById("play").onclick = ()=>{
-  playing = !playing;
-  document.getElementById("play").innerText = playing ? "⏸" : "▶";
-};
-
-setInterval(()=>{
-  if(!playing || !scans.length) return;
-  frame = (frame + 1) % scans.length;
-  document.getElementById("slider").value = frame;
-  render(frame);
-}, 1000);
-</script>
+        loadFrames();
+    </script>
 </body>
 </html>
