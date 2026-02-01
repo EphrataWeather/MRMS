@@ -3,29 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live MRMS Radar</title>
+    <title>MRMS Tiled Radar</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; background: #1a1a1a; }
+        body, html { margin: 0; padding: 0; height: 100%; background: #111; font-family: sans-serif; }
         #map { height: 100vh; width: 100%; }
-        .info-panel {
-            position: absolute; top: 15px; right: 15px;
-            background: rgba(0,0,0,0.8); color: white;
-            padding: 12px; border-radius: 8px; z-index: 1000;
-            font-family: sans-serif; border: 1px solid #444;
+        .radar-tile { 
+            image-rendering: pixelated; 
+            image-rendering: crisp-edges;
+            pointer-events: none !important;
+        }
+        .ui-box {
+            position: absolute; top: 20px; right: 20px;
+            background: rgba(0,0,0,0.85); color: white;
+            padding: 15px; border-radius: 8px; z-index: 1000;
+            border: 1px solid #444; pointer-events: none;
         }
     </style>
 </head>
 <body>
-    <div class="info-panel">
-        <b id="status">Syncing Radar...</b><br>
-        <small id="timestamp"></small>
+    <div class="ui-box">
+        <h3 style="margin:0;">Live MRMS Radar</h3>
+        <div id="timestamp" style="font-size: 12px; color: #aaa;">Syncing...</div>
     </div>
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        const map = L.map('map', { center: [39.8, -98.5], zoom: 4 });
+        const map = L.map('map', { 
+            center: [38, -97], 
+            zoom: 4, 
+            minZoom: 3, 
+            zoomSnap: 0.1 
+        });
 
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; CARTO'
@@ -39,31 +49,32 @@
                 const data = await res.json();
                 const latest = data.latest;
 
-                const [s, w] = latest.bounds[0];
-                const [n, e] = latest.bounds[1];
-                
-                const latStep = (n - s) / 4;
-                const lonStep = (e - w) / 4;
+                const latMin = latest.bounds[0][0];
+                const lonMin = latest.bounds[0][1];
+                const latMax = latest.bounds[1][0];
+                const lonMax = latest.bounds[1][1];
+
+                const latRange = latMax - latMin;
+                const lonRange = lonMax - lonMin;
 
                 radarGroup.clearLayers();
 
                 latest.tiles.forEach(tile => {
-                    const tSouth = n - (tile.row + 1) * latStep;
-                    const tNorth = n - tile.row * latStep;
-                    const tWest = w + tile.col * lonStep;
-                    const tEast = w + (tile.col + 1) * lonStep;
+                    // Precision math to place tiles
+                    const tNorth = latMax - (tile.row * (latRange / 4));
+                    const tSouth = latMax - ((tile.row + 1) * (latRange / 4));
+                    const tWest = lonMin + (tile.col * (lonRange / 4));
+                    const tEast = lonMin + ((tile.col + 1) * (lonRange / 4));
 
                     L.imageOverlay(tile.url + `?t=${Date.now()}`, [[tSouth, tWest], [tNorth, tEast]], {
-                        opacity: 0.7,
-                        interactive: false
+                        opacity: 0.75,
+                        className: 'radar-tile'
                     }).addTo(radarGroup);
                 });
 
-                document.getElementById('timestamp').innerText = latest.time;
-                document.getElementById('status').innerText = "Live MRMS Active";
-            } catch (err) {
-                console.error(err);
-                document.getElementById('status').innerText = "Update Failed";
+                document.getElementById('timestamp').innerText = "Valid: " + latest.time;
+            } catch (e) {
+                console.error("Update error:", e);
             }
         }
 
