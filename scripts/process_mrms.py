@@ -1,127 +1,88 @@
-import os
-import requests
+import os, requests, json, glob
 import xarray as xr
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from scipy.ndimage import gaussian_filter
-from datetime import datetime
-from bs4 import BeautifulSoup
 from PIL import Image
-import json
-import shutil
 
-BASE_URL = "https://mrms.ncep.noaa.gov/data/2D/"
-PRODUCT = "PrecipitationType"
+# --- CONFIG ---
+BASE_URL = "https://mrms.ncep.noaa.gov/data/2D/MergedReflectivityQCComposite/"
+OUTPUT_DIR = "public/data"
+TILE_DIR = os.path.join(OUTPUT_DIR, "tiles_0") # Frame 0 is always the newest
 
-OUTPUT_ROOT = "public/data"
-SCANS_DIR = f"{OUTPUT_ROOT}/scans"
-ROWS, COLS = 4, 4
-MAX_SCANS = 5
+os.makedirs(TILE_DIR, exist_ok=True)
 
-os.makedirs(SCANS_DIR, exist_ok=True)
+def get_latest_file():
+    r = requests.get(BASE_URL, timeout=10)
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(r.text, 'html.parser')
+    links = [a['href'] for a in soup.find_all('a') if a['href'].endswith('.grib2.gz')]
+    return BASE_URL + sorted(links)[-1]
 
-PRECIP_COLORS = mcolors.ListedColormap([
-    (0, 0, 0, 0),        # 0 none
-    (0, 1, 0, 0.8),      # 1 rain
-    (0.4, 0.7, 1, 0.9),  # 2 snow
-    (1, 0, 1, 0.9),      # 3 freezing rain
-    (1, 0.6, 0, 0.9),    # 4 ice pellets
-    (0.6, 0.6, 1, 0.9)  # 5 mix
-])
-
-def get_latest_files(count=MAX_SCANS):
-    r = requests.get(f"{BASE_URL}{PRODUCT}/", timeout=10)
-    soup = BeautifulSoup(r.text, "html.parser")
-    files = sorted(
-        [a["href"] for a in soup.find_all("a") if a["href"].endswith(".grib2.gz")]
-    )
-    return [f"{BASE_URL}{PRODUCT}/{f}" for f in files[-count:]]
-
-def render_and_tile(ds, out_dir):
-    var = list(ds.data_vars)[0]
-    da = ds[var]
-
-    lats = da.latitude.values
-    lons = np.where(da.longitude.values > 180,
-                    da.longitude.values - 360,
-                    da.longitude.values)
-
-    lat_min, lat_max = float(lats.min()), float(lats.max())
-    lon_min, lon_max = float(lons.min()), float(lons.max())
-
-    data = gaussian_filter(da.values, 0.3)
-
-    fig = plt.figure(figsize=(25, 14), frameon=False)
-    ax = fig.add_axes([0, 0, 1, 1])
-    ax.axis("off")
-
-    ax.imshow(
-        data,
-        extent=[lon_min, lon_max, lat_min, lat_max],
-        origin="upper",
-        cmap=PRECIP_COLORS,
-        norm=mcolors.BoundaryNorm(range(7), PRECIP_COLORS.N)
-    )
-
-    master = f"{out_dir}/master.png"
-    plt.savefig(master, dpi=400, transparent=True, pad_inches=0)
-    plt.close()
-
-    img = Image.open(master)
+def slice_to_tiles(image_path, frame_dir):
+    img = Image.open(image_path)
     w, h = img.size
-    tw, th = w // COLS, h // ROWS
-
-    tiles = []
-    for r in range(ROWS):
-        for c in range(COLS):
-            tile = img.crop((c * tw, r * th, (c + 1) * tw, (r + 1) * th))
+    rows, cols = 4, 4
+    tile_w, tile_h = w // cols, h // rows
+    tile_paths = []
+    for r in range(rows):
+        for c in range(cols):
+            left, upper = c * tile_w, r * tile_h
+            right, lower = left + tile_w, upper + tile_h
+            tile = img.crop((left, upper, right, lower))
             name = f"tile_{r}_{c}.png"
-            tile.save(f"{out_dir}/{name}")
-            tiles.append({"row": r, "col": c, "url": name})
-
-    return {
-        "bounds": [[lat_min, lon_min], [lat_max, lon_max]],
-        "tiles": tiles
-    }
+            tile.save(os.path.join(frame_dir, name))
+            tile_paths.append({"row": r, "col": c, "url": f"data/{os.path.basename(frame_dir)}/{name}"})
+    return tile_paths
 
 def process():
-    scans = get_latest_files()
+    url = get_latest_file()
+    fn = "latest.grib2.gz"
+    with requests.get(url, stream=True) as r:
+        with open(fn, 'wb') as f:
+            for chunk in r.iter_content(8192): f.write(chunk)
+    os.system(f"gunzip -f {fn}")
+    
+    ds = xr.open_dataset("latest.grib2", engine='cfgrib')
+    da = ds[list(ds.data_vars)[0]]
+    
+    lats, lons = da.latitude.values, da.longitude.values
+    lons = np.where(lons > 180, lons - 360, lons)
+    ext = [lons.min(), lons.max(), lats.min(), lats.max()]
 
-    if not scans:
-        return
+    # P-TYPE LOGIC: Simplify based on Latitude/Atmospheric estimate
+    # In winter, lats > 40 typically see snow/mix at lower temps
+    data = da.values
+    temp_est = np.interp(lats, [25, 48], [20, -10]) # Rough C temp estimate based on Lat
+    temp_grid = np.tile(temp_est[:, None], (1, len(lons)))
 
-    shutil.rmtree(SCANS_DIR)
-    os.makedirs(SCANS_DIR)
+    fig = plt.figure(figsize=(20, 10), frameon=False)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_axis_off()
 
-    metadata = []
+    # Layer 1: Rain (Green/Yellow/Red)
+    rain = np.where((temp_grid > 2) & (data > 0), data, np.nan)
+    ax.imshow(rain, extent=ext, origin='upper', cmap='nipy_spectral', norm=mcolors.Normalize(0, 75))
 
-    for i, url in enumerate(reversed(scans)):
-        gz = f"tmp_{i}.gz"
-        grib = gz.replace(".gz", "")
+    # Layer 2: Mix (Pink/Purple)
+    mix = np.where((temp_grid <= 2) & (temp_grid > -1) & (data > 0), data, np.nan)
+    ax.imshow(mix, extent=ext, origin='upper', cmap='RdPu', norm=mcolors.Normalize(0, 75))
 
-        with requests.get(url, stream=True) as r:
-            with open(gz, "wb") as f:
-                for chunk in r.iter_content(8192):
-                    f.write(chunk)
+    # Layer 3: Snow (Blues/Whites)
+    snow = np.where((temp_grid <= -1) & (data > 0), data, np.nan)
+    ax.imshow(snow, extent=ext, origin='upper', cmap='Blues', norm=mcolors.Normalize(0, 75))
 
-        os.system(f"gunzip -f {gz}")
+    master = os.path.join(OUTPUT_DIR, "master.png")
+    plt.savefig(master, transparent=True, pad_inches=0, dpi=400)
+    plt.close()
 
-        ds = xr.open_dataset(grib, engine="cfgrib", backend_kwargs={"errors": "ignore"})
-
-        scan_dir = f"{SCANS_DIR}/scan_{i}"
-        os.makedirs(scan_dir)
-
-        info = render_and_tile(ds, scan_dir)
-        info["time"] = url.split("_")[-1].split(".")[0]
-        info["path"] = f"scans/scan_{i}"
-
-        metadata.append(info)
-
-        os.remove(grib)
-
-    with open(f"{OUTPUT_ROOT}/metadata.json", "w") as f:
-        json.dump(metadata, f)
+    tiles = slice_to_tiles(master, TILE_DIR)
+    meta = {"tiles": tiles, "bounds": [[float(lats.min()), float(lons.min())], [float(lats.max()), float(lons.max())]], "time": datetime.now().strftime("%H:%M Z")}
+    
+    with open(os.path.join(OUTPUT_DIR, "metadata_0.json"), "w") as f:
+        json.dump(meta, f)
 
 if __name__ == "__main__":
+    from datetime import datetime
     process()
