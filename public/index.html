@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MRMS Raw Data Viewer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 0; background: #111; color: white; font-family: sans-serif; }
+        #map { height: 100vh; width: 100vw; }
+        #controls {
+            position: absolute; bottom: 20px; left: 20px; z-index: 1000;
+            background: rgba(0,0,0,0.8); padding: 15px; border-radius: 8px;
+            width: 300px;
+        }
+        .control-row { margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;}
+        button { background: #007bff; border: none; padding: 5px 15px; color: white; cursor: pointer; border-radius: 4px; }
+        button:hover { background: #0056b3; }
+        select { background: #333; color: white; border: 1px solid #555; padding: 5px; }
+        #timestamp { font-family: monospace; font-size: 1.2em; color: #00ff00; }
+        input[type=range] { width: 100%; }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="controls">
+    <div class="control-row">
+        <h3>MRMS Viewer</h3>
+        <select id="layerType" onchange="changeLayerType()">
+            <option value="Reflectivity">Reflectivity</option>
+            <option value="PrecipType">Precip Type</option>
+        </select>
+    </div>
+    <div class="control-row">
+        <span id="timestamp">Loading...</span>
+    </div>
+    <div class="control-row">
+        <button id="playBtn" onclick="togglePlay()">Play</button>
+        <span id="frameCounter">0/0</span>
+    </div>
+    <input type="range" id="scrubber" min="0" max="0" value="0" step="1" oninput="scrub(this.value)">
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    // Initialize Map
+    const map = L.map('map').setView([38.0, -98.0], 4);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap &copy; CARTO'
+    }).addTo(map);
+
+    let frames = [];
+    let currentLayer = null;
+    let currentIndex = 0;
+    let isPlaying = false;
+    let timer = null;
+    let rawData = [];
+
+    // Fetch Metadata
+    fetch('data/metadata.json')
+        .then(response => response.json())
+        .then(data => {
+            rawData = data.files;
+            filterData("Reflectivity"); // Default load
+        })
+        .catch(err => console.error("Could not load data. Run the python script first.", err));
+
+    function filterData(type) {
+        // Clear existing
+        if (currentLayer) map.removeLayer(currentLayer);
+        
+        // Filter frames by type and sort by time
+        frames = rawData.filter(f => f.type === type).sort((a,b) => a.time.localeCompare(b.time));
+        
+        if (frames.length === 0) return;
+
+        // Update Slider
+        const slider = document.getElementById('scrubber');
+        slider.max = frames.length - 1;
+        slider.value = frames.length - 1;
+        
+        loadFrame(frames.length - 1);
+    }
+
+    function loadFrame(index) {
+        currentIndex = parseInt(index);
+        const frame = frames[currentIndex];
+        
+        if (currentLayer) map.removeLayer(currentLayer);
+
+        // Add Image Overlay
+        // Bounds come as [[minLat, minLon], [maxLat, maxLon]], Leaflet wants [[minLat, minLon], [maxLat, maxLon]] order check
+        // MRMS usually covers top-left to bottom-right, we ensure correct bounds
+        // Note: Python script calculated min/max, so we are safe.
+        const bounds = [[frame.bounds[0][0], frame.bounds[0][1]], [frame.bounds[1][0], frame.bounds[1][1]]];
+        
+        currentLayer = L.imageOverlay(frame.url, bounds, {opacity: 0.8}).addTo(map);
+
+        // Update UI
+        // Format timestamp: 20231024-120000 -> 12:00:00
+        const t = frame.time.split('-')[1];
+        document.getElementById('timestamp').innerText = `${t.slice(0,2)}:${t.slice(2,4)}:${t.slice(4,6)} Z`;
+        document.getElementById('frameCounter').innerText = `${currentIndex + 1}/${frames.length}`;
+        document.getElementById('scrubber').value = currentIndex;
+    }
+
+    function scrub(val) {
+        loadFrame(val);
+        if(isPlaying) togglePlay(); // Stop if user scrubs
+    }
+
+    function togglePlay() {
+        if (isPlaying) {
+            clearInterval(timer);
+            document.getElementById('playBtn').innerText = "Play";
+            isPlaying = false;
+        } else {
+            document.getElementById('playBtn').innerText = "Pause";
+            isPlaying = true;
+            timer = setInterval(() => {
+                let next = currentIndex + 1;
+                if (next >= frames.length) next = 0;
+                loadFrame(next);
+            }, 500); // 500ms per frame
+        }
+    }
+
+    function changeLayerType() {
+        const type = document.getElementById('layerType').value;
+        filterData(type);
+    }
+</script>
+</body>
+</html>
