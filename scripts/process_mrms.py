@@ -37,11 +37,21 @@ def process():
     # EXACT BOUNDS (Prevents Shifting)
     ext = [lons.min(), lons.max(), lats.min(), lats.max()]
 
-    fig = plt.figure(figsize=(20, 10), frameon=False)
-    ax = fig.add_axes([0, 0, 1, 1])
-    ax.set_axis_off()
+    # Set up the figure with no margins
+    fig = plt.figure(figsize=(20, 10))
+    ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
+    
+    # Force the plot to the exact coordinates of the data
     ax.set_xlim(ext[0], ext[1])
     ax.set_ylim(ext[2], ext[3])
+
+    # Plot layers
+    ax.imshow(np.where((flag_v == 1) & (ref_v > 0), ref_v, np.nan), extent=ext, origin='upper', cmap='nipy_spectral', norm=mcolors.Normalize(0, 75))
+    ax.imshow(np.where((flag_v == 2) & (ref_v > 0), ref_v, np.nan), extent=ext, origin='upper', cmap='Blues', norm=mcolors.Normalize(0, 75))
+    ax.imshow(np.where((flag_v >= 3) & (ref_v > 0), ref_v, np.nan), extent=ext, origin='upper', cmap='RdPu', norm=mcolors.Normalize(0, 75))
+
+    # Save without ANY padding
+    plt.savefig(master, transparent=True, pad_inches=0)
 
     ref_v, flag_v = ref.values, flag.values
     
