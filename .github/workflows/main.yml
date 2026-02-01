@@ -8,7 +8,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # Crucial for the Action to push updates
+      contents: write
     steps:
       - uses: actions/checkout@v3
       
@@ -24,26 +24,36 @@ jobs:
 
       - name: Reset and Rotate
         run: |
-          # Create folders if they don't exist
           mkdir -p public/data/tiles_0 public/data/tiles_1 public/data/tiles_2 public/data/tiles_3 public/data/tiles_4
-          
-          # Rotation logic
           rm -rf public/data/tiles_4 public/data/metadata_4.json || true
           [ -d public/data/tiles_3 ] && mv public/data/tiles_3 public/data/tiles_4 && mv public/data/metadata_3.json public/data/metadata_4.json || true
           [ -d public/data/tiles_2 ] && mv public/data/tiles_2 public/data/tiles_3 && mv public/data/metadata_2.json public/data/metadata_3.json || true
           [ -d public/data/tiles_1 ] && mv public/data/tiles_1 public/data/tiles_2 && mv public/data/metadata_1.json public/data/metadata_2.json || true
           [ -d public/data/tiles_0 ] && mv public/data/tiles_0 public/data/tiles_1 && mv public/data/metadata_0.json public/data/metadata_1.json || true
-          
-          # Recreate tiles_0 for the fresh run
           mkdir -p public/data/tiles_0
 
       - name: Run Script
         run: python scripts/process_mrms.py
 
-      - name: Deploy
+      - name: Deploy Data
         run: |
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
           git add .
-          git commit -m "Fresh Radar Sync" || exit 0
+          git commit -m "Radar Sync: $(date)" || exit 0
           git push
+
+  # THIS IS THE NEW PART THAT FIXES THE STUCK PAGE
+  deploy-pages:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2
