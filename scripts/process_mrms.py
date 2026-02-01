@@ -49,7 +49,6 @@ def process_grib(url, product_name):
 
     # 3. Open with Xarray
     try:
-        # backend_kwargs helps ignore the "Truncating time" errors safely
         ds = xr.open_dataset(local_grib, engine='cfgrib', 
                              backend_kwargs={'errors': 'ignore'})
     except Exception as e:
@@ -62,21 +61,19 @@ def process_grib(url, product_name):
         var_name = list(ds.data_vars)[0]
         da = ds[var_name]
         
-        # --- DEBUG LOGGING ---
-        val_min = float(da.min().values)
-        val_max = float(da.max().values)
-        print(f"   Variable: {var_name}")
-        print(f"   Data Range: {val_min} to {val_max}")
-        # ---------------------
-
+        # --- COORDINATE FIX ---
         min_lat = float(da.latitude.min())
         max_lat = float(da.latitude.max())
         min_lon = float(da.longitude.min())
         max_lon = float(da.longitude.max())
         
-        # bounds = [[South, West], [North, East]]
+        # MRMS uses 0-360 longitude. Leaflet needs -180 to 180.
+        # If longitude is > 180 (e.g. 260), subtract 360 to get negative (e.g. -100)
+        if min_lon > 180: min_lon -= 360
+        if max_lon > 180: max_lon -= 360
+        
         bounds = [[min_lat, min_lon], [max_lat, max_lon]]
-        print(f"   Bounds: {bounds}")
+        print(f"   Corrected Bounds: {bounds}")
 
     except Exception as e:
         print(f"Error reading data vars: {e}")
@@ -89,22 +86,15 @@ def process_grib(url, product_name):
     fig.add_axes(ax)
 
     if product_name == "Reflectivity":
-        # MRMS: -999 is missing, -99 is no precip.
-        # We mask anything <= 0 to be transparent
+        # Mask <= 0
         data = da.where(da > 0)
-        
-        # Standard Radar Colors (Reflectivity)
-        # Using a simple nipy_spectral if pyart isn't installed
         cmap = 'nipy_spectral'
         norm = mcolors.Normalize(vmin=0, vmax=75)
     
     else: # PrecipType
-        # MRMS Flags: -99 (No Data), 0 (No Precip), 1 (Warm Strat), 3 (Snow), 6 (Hail)
-        # We mask < 0. We want to see 0 (No precip) as transparent? Usually yes.
+        # Mask <= 0
         data = da.where(da > 0) 
-        
-        # Custom Colors for Precip Types
-        # 1:Green(Rain), 3:Blue(Snow), 6:Red(Hail) - Simplified
+        # 1:Stratiform(Green), 3:Snow(Blue), 6:Hail(Red) - Simplified
         colors = ['#00ff00', '#00ff00', '#0000ff', '#0000ff', '#ff0000', '#ff0000', '#ff00ff']
         cmap = mcolors.ListedColormap(colors)
         norm = mcolors.Normalize(vmin=0, vmax=10)
