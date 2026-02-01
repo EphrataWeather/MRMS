@@ -1,226 +1,105 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MRMS Precip Type Loop</title>
+    <title>MRMS Interactive Viewer</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; background: #111; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body { margin: 0; background: #1a1a1a; font-family: sans-serif; color: white; }
         #map { height: 100vh; width: 100%; }
-        
-        /* Pixelated rendering for crisp radar pixels */
-        .radar-tile { 
-            image-rendering: pixelated; 
-            pointer-events: none !important;
-        }
-
-        /* UI Overlays */
-        .ui-box {
-            position: absolute; 
-            background: rgba(20, 20, 20, 0.9); 
-            color: #eee;
-            border: 1px solid #444; 
-            border-radius: 8px; 
-            z-index: 1000;
-            backdrop-filter: blur(5px);
-        }
-
-        .header-box {
-            top: 20px; left: 20px;
-            padding: 15px;
-            pointer-events: none; /* Let clicks pass through to map */
-        }
-
-        .controls-box {
-            bottom: 30px; left: 50%;
-            transform: translateX(-50%);
-            padding: 10px 20px;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            width: 80%;
-            max-width: 500px;
-        }
-
-        .legend-box {
-            top: 20px; right: 20px;
-            padding: 10px;
-            font-size: 12px;
-            pointer-events: none;
-        }
-
-        /* Controls */
-        button {
-            background: #007bff; color: white; border: none;
-            padding: 8px 16px; border-radius: 4px; cursor: pointer;
-            font-weight: bold;
-        }
-        button:hover { background: #0056b3; }
-        
-        input[type=range] { flex-grow: 1; cursor: pointer; }
-
-        /* Legend Items */
-        .legend-item { display: flex; align-items: center; margin-bottom: 4px; }
-        .color-box { width: 15px; height: 15px; margin-right: 8px; border-radius: 3px; }
+        #ui { position: absolute; top: 20px; right: 20px; z-index: 1000; background: rgba(30,30,30,0.9); padding: 20px; border-radius: 10px; width: 260px; border: 1px solid #444; }
+        select, button { width: 100%; padding: 10px; margin: 10px 0; cursor: pointer; border-radius: 5px; border: none; }
+        #status { color: #ffcc00; font-size: 0.85em; margin-bottom: 10px; }
+        #timestamp { font-family: monospace; font-size: 1.2em; text-align: center; color: #00ffcc; }
     </style>
 </head>
 <body>
 
-    <div class="ui-box header-box">
-        <h2 style="margin:0; font-size: 1.2rem;">Live Radar</h2>
-        <div id="timestamp" style="font-size: 0.9rem; color: #aaa; margin-top: 5px;">Loading...</div>
-    </div>
+<div id="ui">
+    <div id="status">Ready</div>
+    <select id="prodType">
+        <option value="reflectivity">Radar Reflectivity</option>
+        <option value="precip">Precipitation Rate</option>
+    </select>
+    <button onclick="fetchData()">Load Latest Scans</button>
+    <hr>
+    <div id="timestamp">--:--:--</div>
+    <input type="range" id="scrubber" min="0" max="0" value="0" style="width:100%" oninput="updateFrame(this.value)">
+    <button id="playBtn" onclick="togglePlay()">Play Loop</button>
+</div>
 
-    <div class="ui-box legend-box">
-        <div class="legend-item"><div class="color-box" style="background:linear-gradient(90deg, #00ff00, #004400);"></div> Rain</div>
-        <div class="legend-item"><div class="color-box" style="background:linear-gradient(90deg, #00ffff, #0000ff);"></div> Snow</div>
-        <div class="legend-item"><div class="color-box" style="background:linear-gradient(90deg, #ff00ff, #800080);"></div> Ice/Mix</div>
-    </div>
+<div id="map"></div>
 
-    <div class="ui-box controls-box">
-        <button id="playBtn" onclick="togglePlay()">Pause</button>
-        <input type="range" id="timeSlider" min="0" max="0" value="0" step="1">
-        <span id="speedLabel" style="font-size: 12px; white-space: nowrap;">1x</span>
-    </div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const map = L.map('map').setView([38, -97], 4);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
-    <div id="map"></div>
+    let frames = [];
+    let layers = [];
+    let index = 0;
+    let timer = null;
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script>
-        // --- Map Setup ---
-        const map = L.map('map', { 
-            center: [39, -98], 
-            zoom: 5, 
-            minZoom: 4,
-            zoomControl: false
-        });
+    async function fetchData() {
+        const status = document.getElementById('status');
+        status.innerText = "Downloading & Decoding...";
         
-        L.control.zoom({ position: 'bottomright' }).addTo(map);
-
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; CARTO'
-        }).addTo(map);
-
-        // --- State ---
-        let frames = [];     // Metadata for each time step
-        let layerGroups = []; // Array of L.layerGroup, one per frame
-        let currentIndex = 0;
-        let isPlaying = true;
-        let timer = null;
-
-        // --- Logic ---
-        async function loadRadar() {
-            try {
-                const res = await fetch(`data/metadata.json?t=${Date.now()}`);
-                const data = await res.json();
-                
-                // Clear existing
-                layerGroups.forEach(lg => map.removeLayer(lg));
-                layerGroups = [];
-                
-                frames = data.frames;
-                const slider = document.getElementById('timeSlider');
-                slider.max = frames.length - 1;
-                
-                // Pre-build all layers, but set opacity to 0 initially
-                // This "buffers" them so they are ready to show instantly
-                frames.forEach((frame, idx) => {
-                    const group = L.layerGroup();
-                    
-                    const latMin = frame.bounds[0][0];
-                    const lonMin = frame.bounds[0][1];
-                    const latMax = frame.bounds[1][0];
-                    const lonMax = frame.bounds[1][1];
-                    const latRange = latMax - latMin;
-                    const lonRange = lonMax - lonMin;
-
-                    frame.tiles.forEach(tile => {
-                        const tNorth = latMax - (tile.row * (latRange / 4));
-                        const tSouth = latMax - ((tile.row + 1) * (latRange / 4));
-                        const tWest = lonMin + (tile.col * (lonRange / 4));
-                        const tEast = lonMin + ((tile.col + 1) * (lonRange / 4));
-
-                        L.imageOverlay(tile.url, [[tSouth, tWest], [tNorth, tEast]], {
-                            opacity: 1, // We control visibility via the group
-                            className: 'radar-tile'
-                        }).addTo(group);
-                    });
-                    
-                    // Add to map but hide if not first
-                    group.addTo(map);
-                    if (idx !== frames.length - 1) {
-                        // Actually, Leaflet layerGroups don't have setOpacity.
-                        // We remove/add the group to the map to toggle.
-                        map.removeLayer(group);
-                    }
-                    layerGroups.push(group);
-                });
-
-                // Set to latest
-                currentIndex = frames.length - 1;
-                showFrame(currentIndex);
-                startAnimation();
-
-            } catch (e) {
-                console.error("Radar load failed", e);
-                document.getElementById('timestamp').innerText = "Offline";
+        try {
+            const type = document.getElementById('prodType').value;
+            const res = await fetch(`/get_frames?type=${type}`);
+            
+            // This checks if the response is actually JSON
+            const contentType = res.headers.get("content-type");
+            if (!contentType || !contentType.includes("application/json")) {
+                throw new TypeError("Server sent HTML instead of JSON! Check Python console for errors.");
             }
-        }
 
-        function showFrame(index) {
-            // Hide all
-            layerGroups.forEach(lg => {
-                if(map.hasLayer(lg)) map.removeLayer(lg);
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            if (data.length === 0) throw new Error("No files found on NOAA server.");
+
+            // Clear old layers
+            layers.forEach(l => map.removeLayer(l));
+            layers = [];
+            frames = data;
+
+            // Initialize layers
+            frames.forEach(f => {
+                const l = L.imageOverlay(f.url, f.bounds, { opacity: 0 });
+                l.addTo(map);
+                layers.push(l);
             });
-            
-            // Show current
-            map.addLayer(layerGroups[index]);
-            
-            // Update UI
-            document.getElementById('timeSlider').value = index;
-            
-            // Parse Date: 20231027-120000 -> Readable
-            const raw = frames[index].time; // YYYYMMDD-HHMMSS
-            const year = raw.substring(0,4);
-            const month = raw.substring(4,6);
-            const day = raw.substring(6,8);
-            const hour = raw.substring(9,11);
-            const min = raw.substring(11,13);
-            
-            document.getElementById('timestamp').innerText = `${month}/${day}/${year} ${hour}:${min} UTC`;
-        }
 
-        function nextFrame() {
-            currentIndex = (currentIndex + 1) % frames.length;
-            showFrame(currentIndex);
+            document.getElementById('scrubber').max = frames.length - 1;
+            updateFrame(frames.length - 1);
+            status.innerText = "Data Updated Successfully";
+        } catch (e) {
+            status.innerText = "Error: " + e.message;
+            console.error(e);
         }
+    }
 
-        function startAnimation() {
-            if (timer) clearInterval(timer);
+    function updateFrame(val) {
+        index = parseInt(val);
+        layers.forEach((l, i) => l.setOpacity(i == index ? 0.75 : 0));
+        
+        const rawTime = frames[index].time; // YYYYMMDD-HHMMSS
+        document.getElementById('timestamp').innerText = rawTime.split('-')[1].match(/.{1,2}/g).join(':');
+        document.getElementById('scrubber').value = index;
+    }
+
+    function togglePlay() {
+        if (timer) {
+            clearInterval(timer);
+            timer = null;
+            document.getElementById('playBtn').innerText = "Play Loop";
+        } else {
+            document.getElementById('playBtn').innerText = "Pause";
             timer = setInterval(() => {
-                if (isPlaying) nextFrame();
-            }, 500); // 0.5s per frame
+                index = (index + 1) % frames.length;
+                updateFrame(index);
+            }, 600);
         }
-
-        function togglePlay() {
-            isPlaying = !isPlaying;
-            document.getElementById('playBtn').innerText = isPlaying ? "Pause" : "Play";
-        }
-
-        // Slider Interaction
-        document.getElementById('timeSlider').addEventListener('input', (e) => {
-            isPlaying = false;
-            document.getElementById('playBtn').innerText = "Play";
-            currentIndex = parseInt(e.target.value);
-            showFrame(currentIndex);
-        });
-
-        // Init
-        loadRadar();
-        // Refresh check every 5 mins
-        setInterval(loadRadar, 300000);
-
-    </script>
+    }
+</script>
 </body>
 </html>
