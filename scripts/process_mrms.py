@@ -23,20 +23,32 @@ FRAMES_TO_KEEP = 6
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(TILE_DIR, exist_ok=True)
 
-def get_file_list(product):
-    """Scrapes the MRMS directory and filters for CONUS files."""
-    url = f"{BASE_URL}{product}/"
+def get_latest_file_urls(product_key, limit=10):
+    prod = PRODUCTS[product_key]
+    # We use the 'Latest' directory if available, or the top-level product folder
+    idx_url = f"{BASE_URL}/{prod['url']}/"
+    
     try:
-        r = requests.get(url, timeout=15)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        # Filter for CONUS (00.50 height) and exclude Hawaii/Alaska/Guam
-        links = [a['href'] for a in soup.find_all('a') if a['href'].endswith('.grib2.gz')]
-        # Most CONUS files have '00.50' in the name. 
-        conus_links = [l for l in links if "00.50" in l]
-        conus_links.sort()
-        return conus_links
+        r = requests.get(idx_url, timeout=10)
+        if r.status_code != 200:
+            print(f"Server returned status {r.status_code} for {idx_url}")
+            return []
+        
+        # Use regex to find all grib2.gz files in the HTML index
+        pattern = re.compile(rf'href="({prod["prefix"]}.*?\.grib2\.gz)"')
+        files = pattern.findall(r.text)
+        
+        if not files:
+            print(f"No files matching {prod['prefix']} found at {idx_url}")
+            return []
+
+        # Sort naturally to get the newest files based on timestamp in name
+        files.sort()
+        latest_files = files[-limit:]
+        
+        return [f"{idx_url}{f}" for f in latest_files]
     except Exception as e:
-        print(f"Error fetching {product}: {e}")
+        print(f"Connection Error: {e}")
         return []
 
 def download_and_extract(url, local_path):
