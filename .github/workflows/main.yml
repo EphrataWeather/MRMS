@@ -1,34 +1,41 @@
 name: Radar Update
 on:
   schedule:
-    - cron: '*/10 * * * *' # Run every 10 mins
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install xarray cfgrib numpy matplotlib Pillow beautifulsoup4 requests scipy
+
       - name: Rotate Frames
         run: |
-          # Move T-3 to T-4, T-2 to T-3, etc.
+          mkdir -p public/data/tiles_0 public/data/tiles_1 public/data/tiles_2 public/data/tiles_3 public/data/tiles_4
           rm -rf public/data/tiles_4 public/data/metadata_4.json || true
-          mv public/data/tiles_3 public/data/tiles_4 || true
-          mv public/data/metadata_3.json public/data/metadata_4.json || true
-          mv public/data/tiles_2 public/data/tiles_3 || true
-          mv public/data/metadata_2.json public/data/metadata_3.json || true
-          mv public/data/tiles_1 public/data/tiles_2 || true
-          mv public/data/metadata_1.json public/data/metadata_2.json || true
-          mv public/data/tiles_0 public/data/tiles_1 || true
-          mv public/data/metadata_0.json public/data/metadata_1.json || true
+          [ -d public/data/tiles_3 ] && mv public/data/tiles_3 public/data/tiles_4 && mv public/data/metadata_3.json public/data/metadata_4.json || true
+          [ -d public/data/tiles_2 ] && mv public/data/tiles_2 public/data/tiles_3 && mv public/data/metadata_2.json public/data/metadata_3.json || true
+          [ -d public/data/tiles_1 ] && mv public/data/tiles_1 public/data/tiles_2 && mv public/data/metadata_1.json public/data/metadata_2.json || true
+          [ -d public/data/tiles_0 ] && mv public/data/tiles_0 public/data/tiles_1 && mv public/data/metadata_0.json public/data/metadata_1.json || true
+          mkdir -p public/data/tiles_0
+
       - name: Run Script
-        run: |
-          pip install xarray cfgrib numpy matplotlib Pillow beautifulsoup4 requests
-          python scripts/process_mrms.py
+        run: python scripts/process_mrms.py
+
       - name: Deploy
         run: |
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
           git add .
-          git commit -m "Update radar frames" || exit 0
+          git commit -m "Update radar frames and p-type" || exit 0
           git push
