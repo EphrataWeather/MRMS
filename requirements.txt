@@ -1,7 +1,8 @@
-requests
 xarray
 cfgrib
-matplotlib
-beautifulsoup4
 numpy
+matplotlib
+requests
+beautifulsoup4
 scipy
+Pillow
