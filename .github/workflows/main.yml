@@ -22,29 +22,33 @@ jobs:
           sudo apt-get install -y libeccodes-dev
           pip install xarray cfgrib numpy matplotlib Pillow beautifulsoup4 requests scipy
 
-      - name: Reset and Rotate
+      - name: Rotate Data folders
         run: |
           mkdir -p public/data/tiles_0 public/data/tiles_1 public/data/tiles_2 public/data/tiles_3 public/data/tiles_4
           rm -rf public/data/tiles_4 public/data/metadata_4.json || true
-          [ -d public/data/tiles_3 ] && mv public/data/tiles_3 public/data/tiles_4 && mv public/data/metadata_3.json public/data/metadata_4.json || true
-          [ -d public/data/tiles_2 ] && mv public/data/tiles_2 public/data/tiles_3 && mv public/data/metadata_2.json public/data/metadata_3.json || true
-          [ -d public/data/tiles_1 ] && mv public/data/tiles_1 public/data/tiles_2 && mv public/data/metadata_1.json public/data/metadata_2.json || true
-          [ -d public/data/tiles_0 ] && mv public/data/tiles_0 public/data/tiles_1 && mv public/data/metadata_0.json public/data/metadata_1.json || true
+          [ -f public/data/metadata_3.json ] && mv public/data/tiles_3 public/data/tiles_4 && mv public/data/metadata_3.json public/data/metadata_4.json || true
+          [ -f public/data/metadata_2.json ] && mv public/data/tiles_2 public/data/tiles_3 && mv public/data/metadata_2.json public/data/metadata_3.json || true
+          [ -f public/data/metadata_1.json ] && mv public/data/tiles_1 public/data/tiles_2 && mv public/data/metadata_1.json public/data/metadata_2.json || true
+          [ -f public/data/metadata_0.json ] && mv public/data/tiles_0 public/data/tiles_1 && mv public/data/metadata_0.json public/data/metadata_1.json || true
           mkdir -p public/data/tiles_0
 
-      - name: Run Script
+      - name: Run Radar Script
         run: python scripts/process_mrms.py
 
-      - name: Deploy Data
+      - name: Commit Data Changes
         run: |
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
           git add .
-          git commit -m "Radar Sync: $(date)" || exit 0
+          git commit -m "Radar Update: $(date)" || exit 0
           git push
 
-  # THIS IS THE NEW PART THAT FIXES THE STUCK PAGE
-  deploy-pages:
+      - name: Upload Website Artifact
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: '.' # Uploads everything including index.html and public/
+
+  deploy:
     needs: build
     runs-on: ubuntu-latest
     permissions:
