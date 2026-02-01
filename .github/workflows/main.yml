@@ -1,41 +1,34 @@
-name: Update MRMS Data
-
+name: Radar Update
 on:
   schedule:
-    # Run every 15 minutes (MRMS updates frequently, but Github Actions has limits)
-    - cron: '*/15 * * * *'
-  workflow_dispatch: # Allows manual trigger
-
-permissions:
-  contents: write
+    - cron: '*/10 * * * *' # Run every 10 mins
+  workflow_dispatch:
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install System Dependencies (eccodes)
+      - uses: actions/checkout@v2
+      - name: Rotate Frames
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libeccodes-dev
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install Python Libraries
-        run: pip install -r requirements.txt
-
-      - name: Process MRMS Data
-        run: python scripts/process_mrms.py
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public
-          # Warning: This overwrites the gh-pages branch. 
-          # Ensure your source code is in 'main' and site is served from 'gh-pages'
+          # Move T-3 to T-4, T-2 to T-3, etc.
+          rm -rf public/data/tiles_4 public/data/metadata_4.json || true
+          mv public/data/tiles_3 public/data/tiles_4 || true
+          mv public/data/metadata_3.json public/data/metadata_4.json || true
+          mv public/data/tiles_2 public/data/tiles_3 || true
+          mv public/data/metadata_2.json public/data/metadata_3.json || true
+          mv public/data/tiles_1 public/data/tiles_2 || true
+          mv public/data/metadata_1.json public/data/metadata_2.json || true
+          mv public/data/tiles_0 public/data/tiles_1 || true
+          mv public/data/metadata_0.json public/data/metadata_1.json || true
+      - name: Run Script
+        run: |
+          pip install xarray cfgrib numpy matplotlib Pillow beautifulsoup4 requests
+          python scripts/process_mrms.py
+      - name: Deploy
+        run: |
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          git add .
+          git commit -m "Update radar frames" || exit 0
+          git push
