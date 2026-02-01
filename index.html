@@ -3,224 +3,83 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MRMS Precip Type Loop</title>
+    <title>MRMS Tiled Radar</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; background: #111; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body, html { margin: 0; padding: 0; height: 100%; background: #111; font-family: sans-serif; }
         #map { height: 100vh; width: 100%; }
-        
-        /* Pixelated rendering for crisp radar pixels */
         .radar-tile { 
             image-rendering: pixelated; 
+            image-rendering: crisp-edges;
             pointer-events: none !important;
         }
-
-        /* UI Overlays */
         .ui-box {
-            position: absolute; 
-            background: rgba(20, 20, 20, 0.9); 
-            color: #eee;
-            border: 1px solid #444; 
-            border-radius: 8px; 
-            z-index: 1000;
-            backdrop-filter: blur(5px);
+            position: absolute; top: 20px; right: 20px;
+            background: rgba(0,0,0,0.85); color: white;
+            padding: 15px; border-radius: 8px; z-index: 1000;
+            border: 1px solid #444; pointer-events: none;
         }
-
-        .header-box {
-            top: 20px; left: 20px;
-            padding: 15px;
-            pointer-events: none; /* Let clicks pass through to map */
-        }
-
-        .controls-box {
-            bottom: 30px; left: 50%;
-            transform: translateX(-50%);
-            padding: 10px 20px;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            width: 80%;
-            max-width: 500px;
-        }
-
-        .legend-box {
-            top: 20px; right: 20px;
-            padding: 10px;
-            font-size: 12px;
-            pointer-events: none;
-        }
-
-        /* Controls */
-        button {
-            background: #007bff; color: white; border: none;
-            padding: 8px 16px; border-radius: 4px; cursor: pointer;
-            font-weight: bold;
-        }
-        button:hover { background: #0056b3; }
-        
-        input[type=range] { flex-grow: 1; cursor: pointer; }
-
-        /* Legend Items */
-        .legend-item { display: flex; align-items: center; margin-bottom: 4px; }
-        .color-box { width: 15px; height: 15px; margin-right: 8px; border-radius: 3px; }
     </style>
 </head>
 <body>
-
-    <div class="ui-box header-box">
-        <h2 style="margin:0; font-size: 1.2rem;">Live Radar</h2>
-        <div id="timestamp" style="font-size: 0.9rem; color: #aaa; margin-top: 5px;">Loading...</div>
+    <div class="ui-box">
+        <h3 style="margin:0;">Live MRMS Radar</h3>
+        <div id="timestamp" style="font-size: 12px; color: #aaa;">Syncing...</div>
     </div>
-
-    <div class="ui-box legend-box">
-        <div class="legend-item"><div class="color-box" style="background:linear-gradient(90deg, #00ff00, #004400);"></div> Rain</div>
-        <div class="legend-item"><div class="color-box" style="background:linear-gradient(90deg, #00ffff, #0000ff);"></div> Snow</div>
-        <div class="legend-item"><div class="color-box" style="background:linear-gradient(90deg, #ff00ff, #800080);"></div> Ice/Mix</div>
-    </div>
-
-    <div class="ui-box controls-box">
-        <button id="playBtn" onclick="togglePlay()">Pause</button>
-        <input type="range" id="timeSlider" min="0" max="0" value="0" step="1">
-        <span id="speedLabel" style="font-size: 12px; white-space: nowrap;">1x</span>
-    </div>
-
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // --- Map Setup ---
         const map = L.map('map', { 
-            center: [39, -98], 
-            zoom: 5, 
-            minZoom: 4,
-            zoomControl: false
+            center: [38, -97], 
+            zoom: 4, 
+            minZoom: 3, 
+            zoomSnap: 0.1 
         });
-        
-        L.control.zoom({ position: 'bottomright' }).addTo(map);
 
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; CARTO'
         }).addTo(map);
 
-        // --- State ---
-        let frames = [];     // Metadata for each time step
-        let layerGroups = []; // Array of L.layerGroup, one per frame
-        let currentIndex = 0;
-        let isPlaying = true;
-        let timer = null;
+        let radarGroup = L.layerGroup().addTo(map);
 
-        // --- Logic ---
-        async function loadRadar() {
+        async function updateRadar() {
             try {
                 const res = await fetch(`data/metadata.json?t=${Date.now()}`);
                 const data = await res.json();
-                
-                // Clear existing
-                layerGroups.forEach(lg => map.removeLayer(lg));
-                layerGroups = [];
-                
-                frames = data.frames;
-                const slider = document.getElementById('timeSlider');
-                slider.max = frames.length - 1;
-                
-                // Pre-build all layers, but set opacity to 0 initially
-                // This "buffers" them so they are ready to show instantly
-                frames.forEach((frame, idx) => {
-                    const group = L.layerGroup();
-                    
-                    const latMin = frame.bounds[0][0];
-                    const lonMin = frame.bounds[0][1];
-                    const latMax = frame.bounds[1][0];
-                    const lonMax = frame.bounds[1][1];
-                    const latRange = latMax - latMin;
-                    const lonRange = lonMax - lonMin;
+                const latest = data.latest;
 
-                    frame.tiles.forEach(tile => {
-                        const tNorth = latMax - (tile.row * (latRange / 4));
-                        const tSouth = latMax - ((tile.row + 1) * (latRange / 4));
-                        const tWest = lonMin + (tile.col * (lonRange / 4));
-                        const tEast = lonMin + ((tile.col + 1) * (lonRange / 4));
+                const latMin = latest.bounds[0][0];
+                const lonMin = latest.bounds[0][1];
+                const latMax = latest.bounds[1][0];
+                const lonMax = latest.bounds[1][1];
 
-                        L.imageOverlay(tile.url, [[tSouth, tWest], [tNorth, tEast]], {
-                            opacity: 1, // We control visibility via the group
-                            className: 'radar-tile'
-                        }).addTo(group);
-                    });
-                    
-                    // Add to map but hide if not first
-                    group.addTo(map);
-                    if (idx !== frames.length - 1) {
-                        // Actually, Leaflet layerGroups don't have setOpacity.
-                        // We remove/add the group to the map to toggle.
-                        map.removeLayer(group);
-                    }
-                    layerGroups.push(group);
+                const latRange = latMax - latMin;
+                const lonRange = lonMax - lonMin;
+
+                radarGroup.clearLayers();
+
+                latest.tiles.forEach(tile => {
+                    // Precision math to place tiles
+                    const tNorth = latMax - (tile.row * (latRange / 4));
+                    const tSouth = latMax - ((tile.row + 1) * (latRange / 4));
+                    const tWest = lonMin + (tile.col * (lonRange / 4));
+                    const tEast = lonMin + ((tile.col + 1) * (lonRange / 4));
+
+                    L.imageOverlay(tile.url + `?t=${Date.now()}`, [[tSouth, tWest], [tNorth, tEast]], {
+                        opacity: 0.75,
+                        className: 'radar-tile'
+                    }).addTo(radarGroup);
                 });
 
-                // Set to latest
-                currentIndex = frames.length - 1;
-                showFrame(currentIndex);
-                startAnimation();
-
+                document.getElementById('timestamp').innerText = "Valid: " + latest.time;
             } catch (e) {
-                console.error("Radar load failed", e);
-                document.getElementById('timestamp').innerText = "Offline";
+                console.error("Update error:", e);
             }
         }
 
-        function showFrame(index) {
-            // Hide all
-            layerGroups.forEach(lg => {
-                if(map.hasLayer(lg)) map.removeLayer(lg);
-            });
-            
-            // Show current
-            map.addLayer(layerGroups[index]);
-            
-            // Update UI
-            document.getElementById('timeSlider').value = index;
-            
-            // Parse Date: 20231027-120000 -> Readable
-            const raw = frames[index].time; // YYYYMMDD-HHMMSS
-            const year = raw.substring(0,4);
-            const month = raw.substring(4,6);
-            const day = raw.substring(6,8);
-            const hour = raw.substring(9,11);
-            const min = raw.substring(11,13);
-            
-            document.getElementById('timestamp').innerText = `${month}/${day}/${year} ${hour}:${min} UTC`;
-        }
-
-        function nextFrame() {
-            currentIndex = (currentIndex + 1) % frames.length;
-            showFrame(currentIndex);
-        }
-
-        function startAnimation() {
-            if (timer) clearInterval(timer);
-            timer = setInterval(() => {
-                if (isPlaying) nextFrame();
-            }, 500); // 0.5s per frame
-        }
-
-        function togglePlay() {
-            isPlaying = !isPlaying;
-            document.getElementById('playBtn').innerText = isPlaying ? "Pause" : "Play";
-        }
-
-        // Slider Interaction
-        document.getElementById('timeSlider').addEventListener('input', (e) => {
-            isPlaying = false;
-            document.getElementById('playBtn').innerText = "Play";
-            currentIndex = parseInt(e.target.value);
-            showFrame(currentIndex);
-        });
-
-        // Init
-        loadRadar();
-        // Refresh check every 5 mins
-        setInterval(loadRadar, 300000);
-
+        updateRadar();
+        setInterval(updateRadar, 120000);
     </script>
 </body>
 </html>
