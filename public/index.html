@@ -3,73 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live MRMS Radar - Tiled</title>
+    <title>Live MRMS Radar</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body, html { margin: 0; padding: 0; height: 100%; background: #1a1a1a; }
         #map { height: 100vh; width: 100%; }
-
-        .radar-layer {
-            transition: opacity 0.3s;
-            image-rendering: pixelated;
-        }
-
         .info-panel {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            background: rgba(0, 0, 0, 0.85);
-            color: white;
-            padding: 15px;
-            border-radius: 8px;
-            font-family: sans-serif;
-            z-index: 1000;
-            border: 1px solid #444;
+            position: absolute; top: 15px; right: 15px;
+            background: rgba(0,0,0,0.8); color: white;
+            padding: 12px; border-radius: 8px; z-index: 1000;
+            font-family: sans-serif; border: 1px solid #444;
         }
-
-        .legend {
-            position: absolute;
-            bottom: 30px;
-            left: 20px;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 10px;
-            border-radius: 5px;
-            z-index: 1000;
-            color: white;
-            font-size: 12px;
-        }
-        .legend-bar {
-            width: 200px;
-            height: 15px;
-            background: linear-gradient(to right, #0000ff, #00ff00, #ffff00, #ff0000, #ff00ff);
-            margin-bottom: 5px;
-        }
-        .legend-labels { display: flex; justify-content: space-between; }
     </style>
 </head>
 <body>
-
     <div class="info-panel">
-        <h3 style="margin:0 0 5px 0;">MRMS Tiled Radar</h3>
-        <div id="timestamp">Waiting for data...</div>
-        <div id="status" style="font-size: 11px; color: #00ff00;">System Active</div>
+        <b id="status">Syncing Radar...</b><br>
+        <small id="timestamp"></small>
     </div>
-
-    <div class="legend">
-        <div style="margin-bottom:5px;">Reflectivity (dBZ)</div>
-        <div class="legend-bar"></div>
-        <div class="legend-labels"><span>0</span><span>20</span><span>40</span><span>60</span><span>75</span></div>
-    </div>
-
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        const map = L.map('map', {
-            center: [38.5, -96.5],
-            zoom: 4,
-            zoomSnap: 0.5
-        });
+        const map = L.map('map', { center: [39.8, -98.5], zoom: 4 });
 
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; CARTO'
@@ -78,57 +34,41 @@
         let radarGroup = L.layerGroup().addTo(map);
 
         async function updateRadar() {
-            console.log("Fetching new radar data...");
             try {
-                const response = await fetch(`data/metadata.json?t=${Date.now()}`);
-                if (!response.ok) throw new Error("Metadata file not found");
-                
-                const data = await response.json();
-                
-                // CRITICAL: Pointing to the new JSON structure 'data.latest'
-                const latest = data.latest; 
-                if (!latest) {
-                    console.error("JSON structure mismatch. Expected 'latest' key.");
-                    return;
-                }
+                const res = await fetch(`data/metadata.json?t=${Date.now()}`);
+                const data = await res.json();
+                const latest = data.latest;
 
-                const [south, west] = latest.bounds[0];
-                const [north, east] = latest.bounds[1];
+                const [s, w] = latest.bounds[0];
+                const [n, e] = latest.bounds[1];
                 
-                // Calculate size of each tile (4x4 grid)
-                const latStep = (north - south) / 4;
-                const lonStep = (east - west) / 4;
+                const latStep = (n - s) / 4;
+                const lonStep = (e - w) / 4;
 
-                // Clear existing tiles
                 radarGroup.clearLayers();
 
-                // Add each tile to the map
                 latest.tiles.forEach(tile => {
-                    const tSouth = north - (tile.row + 1) * latStep;
-                    const tNorth = north - tile.row * latStep;
-                    const tWest = west + tile.col * lonStep;
-                    const tEast = west + (tile.col + 1) * lonStep;
+                    const tSouth = n - (tile.row + 1) * latStep;
+                    const tNorth = n - tile.row * latStep;
+                    const tWest = w + tile.col * lonStep;
+                    const tEast = w + (tile.col + 1) * lonStep;
 
-                    const tileBounds = [[tSouth, tWest], [tNorth, tEast]];
-                    
-                    L.imageOverlay(tile.url + `?t=${Date.now()}`, tileBounds, {
-                        opacity: 0.75,
-                        className: 'radar-layer'
+                    L.imageOverlay(tile.url + `?t=${Date.now()}`, [[tSouth, tWest], [tNorth, tEast]], {
+                        opacity: 0.7,
+                        interactive: false
                     }).addTo(radarGroup);
                 });
 
-                document.getElementById('timestamp').innerText = "Last Update: " + latest.time;
-                console.log("Radar tiles updated successfully.");
-
-            } catch (e) {
-                console.error("Update failed:", e);
-                document.getElementById('status').innerText = "Update Error - See Console";
-                document.getElementById('status').style.color = "red";
+                document.getElementById('timestamp').innerText = latest.time;
+                document.getElementById('status').innerText = "Live MRMS Active";
+            } catch (err) {
+                console.error(err);
+                document.getElementById('status').innerText = "Update Failed";
             }
         }
 
         updateRadar();
-        setInterval(updateRadar, 120000); // Refresh every 2 mins
+        setInterval(updateRadar, 120000);
     </script>
 </body>
 </html>
