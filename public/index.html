@@ -1,134 +1,166 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>MRMS Raw Data Viewer</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live MRMS Radar</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; padding: 0; background: #111; color: white; font-family: sans-serif; }
-        #map { height: 100vh; width: 100vw; }
-        #controls {
-            position: absolute; bottom: 20px; left: 20px; z-index: 1000;
-            background: rgba(0,0,0,0.8); padding: 15px; border-radius: 8px;
-            width: 300px;
+        body, html { margin: 0; padding: 0; height: 100%; background: #1a1a1a; }
+        #map { height: 100vh; width: 100%; }
+
+        /* Smooth Radar Transition */
+        .radar-layer {
+            transition: opacity 0.5s ease-in-out;
+            image-rendering: optimizeSpeed;             /* Legal fallback */
+            image-rendering: -webkit-optimize-contrast; /* Chrome/Safari */
+            image-rendering: pixelated;                 /* Sharpness on zoom */
         }
-        .control-row { margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;}
-        button { background: #007bff; border: none; padding: 5px 15px; color: white; cursor: pointer; border-radius: 4px; }
-        button:hover { background: #0056b3; }
-        select { background: #333; color: white; border: 1px solid #555; padding: 5px; }
-        #timestamp { font-family: monospace; font-size: 1.2em; color: #00ff00; }
-        input[type=range] { width: 100%; }
+
+        /* UI Overlays */
+        .info-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.85);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            z-index: 1000;
+            border: 1px solid #444;
+            pointer-events: none;
+        }
+
+        /* Radar Legend */
+        .legend {
+            position: absolute;
+            bottom: 30px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 1000;
+            color: white;
+            font-size: 12px;
+        }
+        .legend-bar {
+            width: 200px;
+            height: 15px;
+            background: linear-gradient(to right, #0000ff, #00ff00, #ffff00, #ff0000, #ff00ff);
+            margin-bottom: 5px;
+            border-radius: 2px;
+        }
+        .legend-labels { display: flex; justify-content: space-between; }
+
+        /* Loading Spinner */
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2000;
+            color: white;
+            font-family: sans-serif;
+            background: rgba(0,0,0,0.5);
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+        }
     </style>
 </head>
 <body>
 
-<div id="map"></div>
+    <div id="loader">Updating Radar Data...</div>
 
-<div id="controls">
-    <div class="control-row">
-        <h3>MRMS Viewer</h3>
-        <select id="layerType" onchange="changeLayerType()">
-            <option value="Reflectivity">Reflectivity</option>
-            <option value="PrecipType">Precip Type</option>
-        </select>
+    <div class="info-panel">
+        <h3 style="margin:0 0 5px 0;">MRMS Live Radar</h3>
+        <div id="timestamp">Loading...</div>
+        <div id="status" style="font-size: 11px; color: #aaa; margin-top: 5px;">Synchronizing with NOAA...</div>
     </div>
-    <div class="control-row">
-        <span id="timestamp">Loading...</span>
+
+    <div class="legend">
+        <div style="margin-bottom:5px;">Reflectivity (dBZ)</div>
+        <div class="legend-bar"></div>
+        <div class="legend-labels">
+            <span>0</span><span>20</span><span>40</span><span>60</span><span>75+</span>
+        </div>
     </div>
-    <div class="control-row">
-        <button id="playBtn" onclick="togglePlay()">Play</button>
-        <span id="frameCounter">0/0</span>
-    </div>
-    <input type="range" id="scrubber" min="0" max="0" value="0" step="1" oninput="scrub(this.value)">
-</div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-    // Initialize Map
-    const map = L.map('map').setView([38.0, -98.0], 4);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap &copy; CARTO'
-    }).addTo(map);
+    <div id="map"></div>
 
-    let frames = [];
-    let currentLayer = null;
-    let currentIndex = 0;
-    let isPlaying = false;
-    let timer = null;
-    let rawData = [];
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // Initialize Map
+        const map = L.map('map', {
+            center: [38.5, -96.5],
+            zoom: 5,
+            zoomSnap: 0.5,
+            wheelPxPerZoomLevel: 120
+        });
 
-    // Fetch Metadata
-    fetch('data/metadata.json')
-        .then(response => response.json())
-        .then(data => {
-            rawData = data.files;
-            filterData("Reflectivity"); // Default load
-        })
-        .catch(err => console.error("Could not load data. Run the python script first.", err));
+        // Dark Theme Base Layer
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap &copy; CARTO'
+        }).addTo(map);
 
-    function filterData(type) {
-        // Clear existing
-        if (currentLayer) map.removeLayer(currentLayer);
-        
-        // Filter frames by type and sort by time
-        frames = rawData.filter(f => f.type === type).sort((a,b) => a.time.localeCompare(b.time));
-        
-        if (frames.length === 0) return;
+        let radarLayer = null;
 
-        // Update Slider
-        const slider = document.getElementById('scrubber');
-        slider.max = frames.length - 1;
-        slider.value = frames.length - 1;
-        
-        loadFrame(frames.length - 1);
-    }
+        async function updateRadar() {
+            document.getElementById('loader').style.display = 'block';
+            
+            try {
+                // Fetch the metadata generated by your Python script
+                // Adding a cache-buster timestamp to ensure we get the latest data
+                const response = await fetch(`data/metadata.json?t=${Date.now()}`);
+                const data = await response.json();
+                
+                // Get the most recent Reflectivity file
+                const latest = data.files.filter(f => f.type === "Reflectivity").pop();
 
-    function loadFrame(index) {
-        currentIndex = parseInt(index);
-        const frame = frames[currentIndex];
-        
-        if (currentLayer) map.removeLayer(currentLayer);
+                if (latest) {
+                    const imageUrl = latest.url + `?t=${Date.now()}`;
+                    
+                    // Leaflet ImageOverlay uses [[South, West], [North, East]]
+                    const bounds = latest.bounds;
 
-        // Add Image Overlay
-        // Bounds come as [[minLat, minLon], [maxLat, maxLon]], Leaflet wants [[minLat, minLon], [maxLat, maxLon]] order check
-        // MRMS usually covers top-left to bottom-right, we ensure correct bounds
-        // Note: Python script calculated min/max, so we are safe.
-       const bounds = [[frame.bounds[0][0], frame.bounds[0][1]], [frame.bounds[1][0], frame.bounds[1][1]]];
-        
-        currentLayer = L.imageOverlay(frame.url, bounds, {opacity: 0.8}).addTo(map);
+                    // Remove old layer if it exists
+                    if (radarLayer) {
+                        map.removeLayer(radarLayer);
+                    }
 
-        // Update UI
-        // Format timestamp: 20231024-120000 -> 12:00:00
-        const t = frame.time.split('-')[1];
-        document.getElementById('timestamp').innerText = `${t.slice(0,2)}:${t.slice(2,4)}:${t.slice(4,6)} Z`;
-        document.getElementById('frameCounter').innerText = `${currentIndex + 1}/${frames.length}`;
-        document.getElementById('scrubber').value = currentIndex;
-    }
+                    // Create new radar layer
+                    radarLayer = L.imageOverlay(imageUrl, bounds, {
+                        opacity: 0.75,
+                        className: 'radar-layer',
+                        zIndex: 500,
+                        interactive: false
+                    }).addTo(map);
 
-    function scrub(val) {
-        loadFrame(val);
-        if(isPlaying) togglePlay(); // Stop if user scrubs
-    }
-
-    function togglePlay() {
-        if (isPlaying) {
-            clearInterval(timer);
-            document.getElementById('playBtn').innerText = "Play";
-            isPlaying = false;
-        } else {
-            document.getElementById('playBtn').innerText = "Pause";
-            isPlaying = true;
-            timer = setInterval(() => {
-                let next = currentIndex + 1;
-                if (next >= frames.length) next = 0;
-                loadFrame(next);
-            }, 500); // 500ms per frame
+                    // Update UI
+                    const dateObj = new Date(
+                        latest.time.substring(0,4), 
+                        latest.time.substring(4,6)-1, 
+                        latest.time.substring(6,8), 
+                        latest.time.substring(9,11), 
+                        latest.time.substring(11,13)
+                    );
+                    document.getElementById('timestamp').innerText = dateObj.toLocaleString() + " UTC";
+                    document.getElementById('status').innerText = "V2 High-Res Active";
+                }
+            } catch (e) {
+                console.error("Error updating radar:", e);
+                document.getElementById('status').innerText = "Offline - Check Workflow";
+            }
+            
+            document.getElementById('loader').style.display = 'none';
         }
-    }
 
-    function changeLayerType() {
-        const type = document.getElementById('layerType').value;
-        filterData(type);
-    }
-</script>
+        // Initial load
+        updateRadar();
+
+        // Refresh every 2 minutes
+        setInterval(updateRadar, 120000);
+    </script>
 </body>
 </html>
