@@ -10,6 +10,8 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
+# ... (rest of the processing logic)
+
 # --- Configuration ---
 IMG_DIR = "static/images"
 DATA_DIR = "mrms_data"
