@@ -4,7 +4,6 @@ on:
     - cron: '*/10 * * * *'
   workflow_dispatch:
 
-# These permissions are REQUIRED for the deploy step to work
 permissions:
   contents: write
   pages: write
@@ -20,7 +19,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -36,7 +35,6 @@ jobs:
       - name: Rotate Data folders
         run: |
           mkdir -p public/data/tiles_0 public/data/tiles_1 public/data/tiles_2 public/data/tiles_3 public/data/tiles_4
-          # Move files down the chain
           rm -rf public/data/tiles_4 public/data/metadata_4.json || true
           [ -f public/data/metadata_3.json ] && mv public/data/tiles_3 public/data/tiles_4 && mv public/data/metadata_3.json public/data/metadata_4.json || true
           [ -f public/data/metadata_2.json ] && mv public/data/tiles_2 public/data/tiles_3 && mv public/data/metadata_2.json public/data/metadata_3.json || true
@@ -56,13 +54,13 @@ jobs:
           git push
 
       - name: Setup Pages
-        uses: actions/configure-pages@v3
+        uses: actions/configure-pages@v5
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v2
+        uses: actions/upload-pages-artifact@v3
         with:
           path: '.'
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2
+        uses: actions/deploy-pages@v4
