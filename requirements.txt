@@ -1,0 +1,7 @@
+requests
+xarray
+cfgrib
+matplotlib
+beautifulsoup4
+numpy
+scipy
