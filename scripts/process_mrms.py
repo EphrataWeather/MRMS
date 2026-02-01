@@ -1,109 +1,112 @@
 import os
-import glob
-import gzip
-import shutil
 import requests
-import re
-import json
-import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import numpy as np
+from datetime import datetime
+import json
+import glob
+from bs4 import BeautifulSoup
+from scipy.ndimage import gaussian_filter
+from PIL import Image
 
-# ... (rest of the processing logic)
+# --- CONFIGURATION ---
+BASE_URL = "https://mrms.ncep.noaa.gov/data/2D/"
+PROD_REF = "MergedReflectivityQCComposite"
+OUTPUT_DIR = "public/data"
+TILE_DIR = "public/data/tiles"
 
-# --- Configuration ---
-IMG_DIR = "static/images"
-DATA_DIR = "mrms_data"
-BASE_URL = "https://mrms.ncep.noaa.gov/data/2D"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(TILE_DIR, exist_ok=True)
 
-os.makedirs(IMG_DIR, exist_ok=True)
-os.makedirs(DATA_DIR, exist_ok=True)
-
-PRODUCTS = {
-    "reflectivity": {
-        "url": "MergedReflectivityQCComposite",
-        "prefix": "MRMS_MergedReflectivityQCComposite",
-        "cmap": "jet",
-        "vmin": 0, "vmax": 75
-    },
-    "precip": {
-        "url": "PrecipRate",
-        "prefix": "MRMS_PrecipRate",
-        "cmap": "coolwarm",
-        "vmin": 0, "vmax": 100
-    }
-}
-
-def get_latest_file_urls(product_key, limit=10):
-    prod = PRODUCTS[product_key]
-    idx_url = f"{BASE_URL}/{prod['url']}/"
+def get_latest_files(product, count=1):
+    url = f"{BASE_URL}{product}/"
     try:
-        r = requests.get(idx_url, timeout=15)
-        pattern = re.compile(rf'href="({prod["prefix"]}.*?\.grib2\.gz)"')
-        all_files = sorted(list(set(pattern.findall(r.text))))
-        return [f"{idx_url}{f}" for f in all_files[-limit:]]
-    except:
-        return []
+        r = requests.get(url, timeout=10)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        links = [a['href'] for a in soup.find_all('a') if a['href'].endswith('.grib2.gz')]
+        links.sort()
+        return [url + l for l in links[-count:]]
+    except: return []
 
-def process_grib_to_png(grib_path, out_path, product_key):
+def slice_to_tiles(image_path, rows=4, cols=4):
+    img = Image.open(image_path)
+    w, h = img.size
+    tile_w, tile_h = w // cols, h // rows
+    tile_data = []
+    for r in range(rows):
+        for c in range(cols):
+            left, upper = c * tile_w, r * tile_h
+            right = left + tile_w if c < cols-1 else w
+            lower = upper + tile_h if r < rows-1 else h
+            tile = img.crop((left, upper, right, lower))
+            tile_name = f"tile_{r}_{c}.png"
+            tile.save(os.path.join(TILE_DIR, tile_name))
+            tile_data.append({"row": r, "col": c, "url": f"data/tiles/{tile_name}"})
+    return tile_data
+
+def process_grib(url):
+    filename = url.split('/')[-1]
+    local_gz = f"temp_{filename}"
+    local_grib = local_gz.replace(".gz", "")
+    
     try:
-        unzipped = grib_path.replace(".gz", "")
-        with gzip.open(grib_path, 'rb') as f_in, open(unzipped, 'wb') as f_out:
-            shutil.copyfileobj(f_in, f_out)
+        with requests.get(url, stream=True) as r:
+            with open(local_gz, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
+        os.system(f"gunzip -f {local_gz}")
 
-        ds = xr.open_dataset(unzipped, engine='cfgrib')
-        data = ds[list(ds.data_vars)[0]].values
-        prod = PRODUCTS[product_key]
-        data = np.where(data < prod['vmin'], np.nan, data)
+        ds = xr.open_dataset(local_grib, engine='cfgrib', backend_kwargs={'errors': 'ignore'})
+        var_name = list(ds.data_vars)[0]
+        da = ds[var_name]
+        
+        # Coordinate handling
+        lats = da.latitude.values
+        lons = np.where(da.longitude.values > 180, da.longitude.values - 360, da.longitude.values)
+        
+        lon_min, lon_max = float(lons.min()), float(lons.max())
+        lat_min, lat_max = float(lats.min()), float(lats.max())
 
-        plt.figure(figsize=(10, 10), frameon=False)
-        ax = plt.Axes(plt.gcf(), [0, 0, 1, 1])
+        # FIX: We use 'origin=upper' in imshow later, so we use raw data here
+        data_to_plot = da.values
+        smoothed = gaussian_filter(data_to_plot, sigma=0.6)
+        final_data = np.where(smoothed > 0.5, smoothed, np.nan)
+
+        # High-Res Rendering with Fixed Aspect Ratio
+        h_w_ratio = (lat_max - lat_min) / (lon_max - lon_min)
+        fig = plt.figure(figsize=(25, 25 * h_w_ratio), frameon=False)
+        ax = fig.add_axes([0, 0, 1, 1])
         ax.set_axis_off()
-        plt.gcf().add_axes(ax)
+
+        # CRITICAL FIX: origin='upper' + explicit extent prevents the "South Shift"
+        ax.imshow(final_data, 
+                  extent=[lon_min, lon_max, lat_min, lat_max], 
+                  origin='upper', 
+                  cmap='nipy_spectral', 
+                  norm=mcolors.Normalize(0, 75), 
+                  interpolation='bilinear')
         
-        cmap = plt.get_cmap(prod['cmap']).copy()
-        cmap.set_bad(color='none') 
-        ax.imshow(data, origin='upper', cmap=cmap, 
-                  norm=mcolors.Normalize(vmin=prod['vmin'], vmax=prod['vmax']), aspect='auto')
-        
-        plt.savefig(out_path, format='png', transparent=True, dpi=100)
+        master_path = os.path.join(OUTPUT_DIR, "master_radar.png")
+        # pad_inches=0 and NO bbox_inches='tight' preserves the geographic frame
+        plt.savefig(master_path, transparent=True, pad_inches=0, dpi=450) 
         plt.close()
-        os.remove(unzipped)
-        return True
-    except Exception as e:
-        print(f"Error: {e}")
-        return False
+
+        tiles = slice_to_tiles(master_path)
+        timestamp = filename.split('_')[-1].split('.')[0]
+        return {"tiles": tiles, "bounds": [[lat_min, lon_min], [lat_max, lon_max]], "time": timestamp}
+    
+    finally:
+        if os.path.exists(local_grib): os.remove(local_grib)
+        if os.path.exists(local_gz): os.remove(local_gz)
 
 def main():
-    manifest = {"reflectivity": [], "precip": []}
-    
-    for p_key in PRODUCTS:
-        urls = get_latest_file_urls(p_key)
-        for url in urls:
-            fname = url.split('/')[-1]
-            img_name = fname.replace('.grib2.gz', '.png')
-            local_gz = os.path.join(DATA_DIR, fname)
-            local_img = os.path.join(IMG_DIR, img_name)
-
-            if not os.path.exists(local_img):
-                print(f"Processing {fname}...")
-                r = requests.get(url)
-                with open(local_gz, 'wb') as f:
-                    f.write(r.content)
-                process_grib_to_png(local_gz, local_img, p_key)
-                if os.path.exists(local_gz): os.remove(local_gz)
-
-            if os.path.exists(local_img):
-                manifest[p_key].append({
-                    "url": f"static/images/{img_name}",
-                    "time": fname.split('_')[-1].split('.')[0],
-                    "bounds": [[20.0, -130.0], [55.0, -60.0]]
-                })
-    
-    # Save the manifest so the HTML can read it without a Flask server
-    with open('manifest.json', 'w') as f:
-        json.dump(manifest, f)
+    for f in glob.glob(f"{TILE_DIR}/*.png"): os.remove(f)
+    ref_files = get_latest_files(PROD_REF, 1)
+    if ref_files:
+        result = process_grib(ref_files[0])
+        with open(f"{OUTPUT_DIR}/metadata.json", "w") as f:
+            json.dump({"latest": result}, f)
 
 if __name__ == "__main__":
     main()
