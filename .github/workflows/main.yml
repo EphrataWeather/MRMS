@@ -1,39 +1,31 @@
-name: Update MRMS Radar
-
+name: Update MRMS Data
 on:
   schedule:
-    - cron: '*/20 * * * *' # Run every 20 minutes
+    - cron: '*/10 * * * *' # Every 10 mins
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install System Dependencies
+      - uses: actions/checkout@v3
+      
+      - name: Setup Conda
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: "3.10"
+          channels: conda-forge
+          
+      - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libeccodes-dev
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install Python Libraries
-        run: pip install -r requirements.txt
-
-      - name: Process MRMS Data
+          conda install eccodes cfgrib xarray matplotlib requests numpy
+          
+      - name: Run processor
         run: python scripts/process_mrms.py
-
+        
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+        uses: stefanzweifel/git-auto-commit-action@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public
-          force_orphan: true
+          commit_message: "Update MRMS imagery"
+          file_pattern: 'static/images/*.png manifest.json'
