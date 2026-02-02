@@ -10,66 +10,55 @@ permissions:
   id-token: write
 
 jobs:
-  build_and_push:
+  build_and_deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libeccodes-dev
-
-      - name: Install Python Dependencies
-        run: |
+      - run: |
+          sudo apt-get update && sudo apt-get install -y libeccodes-dev
           pip install xarray cfgrib numpy matplotlib Pillow beautifulsoup4 requests scipy
 
-      - name: Rotate Data folders
+      - name: Rotate 10 Frames of History
         run: |
-          # Create folders if they don't exist
-          mkdir -p public/data/tiles_0 public/data/tiles_1 public/data/tiles_2 public/data/tiles_3 public/data/tiles_4
+          mkdir -p public/data/tiles_0
+          # Delete oldest (Frame 9)
+          rm -rf public/data/tiles_9 public/data/master_9.png public/data/metadata_9.json || true
           
-          # Shift existing data (4 is deleted, 3 becomes 4, etc.)
-          rm -rf public/data/tiles_4 public/data/metadata_4.json || true
-          [ -f public/data/metadata_3.json ] && mv public/data/tiles_3 public/data/tiles_4 && mv public/data/metadata_3.json public/data/metadata_4.json || true
-          [ -f public/data/metadata_2.json ] && mv public/data/tiles_2 public/data/tiles_3 && mv public/data/metadata_2.json public/data/metadata_3.json || true
-          [ -f public/data/metadata_1.json ] && mv public/data/tiles_1 public/data/tiles_2 && mv public/data/metadata_1.json public/data/metadata_2.json || true
-          [ -f public/data/metadata_0.json ] && mv public/data/tiles_0 public/data/tiles_1 && mv public/data/metadata_0.json public/data/metadata_1.json || true
+          # Move 8->9, 7->8, etc.
+          for i in 8 7 6 5 4 3 2 1 0; do
+            next=$((i+1))
+            if [ -f public/data/metadata_$i.json ]; then
+              mv public/data/tiles_$i public/data/tiles_$next
+              mv public/data/master_$i.png public/data/master_$next.png 2>/dev/null || mv public/data/master.png public/data/master_$next.png
+              mv public/data/metadata_$i.json public/data/metadata_$next.json
+            fi
+          done
           
-          # Fresh start for the current run
+          # Recreate fresh folder for Frame 0
           mkdir -p public/data/tiles_0
 
-      - name: Run Radar Script
+      - name: Run Script
         run: python scripts/process_mrms.py
 
-      - name: Commit and Push Data
+      - name: Commit Data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add public/data/
-          git commit -m "Radar History Update [skip ci]" || echo "No changes"
+          git commit -m "Radar Update [skip ci]" || echo "No changes"
           git push
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: '.'
-
-  deploy:
-    # THIS SECTION FIXES THE ERROR
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build_and_push
-    steps:
-      - name: Deploy to GitHub Pages
+      - uses: actions/deploy-pages@v4
         id: deployment
-        uses: actions/deploy-pages@v4
+        environment:
+          name: github-pages
+          url: ${{ steps.deployment.outputs.page_url }}
