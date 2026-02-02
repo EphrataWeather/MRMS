@@ -14,16 +14,22 @@ BASE_URL = "https://mrms.ncep.noaa.gov/data/2D/"
 REF_PROD = "MergedReflectivityQCComposite"
 FLAG_PROD = "PrecipFlag"
 OUTPUT_DIR = "public/data"
-TILE_DIR = os.path.join(OUTPUT_DIR, "tiles_0")
-os.makedirs(TILE_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# --- PROFESSIONAL COLOR TABLES ---
-# Rain: Green -> Yellow -> Red
-cmap_rain = mcolors.LinearSegmentedColormap.from_list('rain', ["#00fb90", "#00bb00", "#ffff00", "#ff0000", "#b90000"], N=256)
-# Snow: Light Blue -> Deep Blue -> White
-cmap_snow = mcolors.LinearSegmentedColormap.from_list('snow', ["#00dcf5", "#005df5", "#002df5", "#ffffff"], N=256)
-# Ice/Mix: Pink -> Bright Purple
-cmap_mix = mcolors.LinearSegmentedColormap.from_list('mix', ["#ff00f6", "#9a00f6", "#5500a1"], N=256)
+# --- PROFESSIONAL WEATHER BRANDING COLORS ---
+# Rain: Light Green -> Dark Green -> Yellow -> Orange -> Red -> Crimson
+rain_colors = ['#00A500', '#007D00', '#005000', '#FFFF00', '#FF8C00', '#FF0000', '#B40000']
+cmap_rain = mcolors.LinearSegmentedColormap.from_list('accu_rain', rain_colors, N=256)
+
+# Snow: Light Blue -> Medium Blue -> Deep Royal Blue -> White
+# (Using AccuWeather-style deep blues for snow)
+snow_colors = ['#ADD8E6', '#87CEEB', '#0000FF', '#00008B', '#FFFFFF']
+cmap_snow = mcolors.LinearSegmentedColormap.from_list('accu_snow', snow_colors, N=256)
+
+# Mix/Ice: Light Pink -> Hot Pink -> Dark Purple
+# (This clearly distinguishes sleet/freezing rain from pure snow)
+mix_colors = ['#FFC0CB', '#FF69B4', '#FF00FF', '#800080']
+cmap_mix = mcolors.LinearSegmentedColormap.from_list('accu_mix', mix_colors, N=256)
 
 def get_latest_urls(prod):
     url = f"{BASE_URL}{prod}/"
@@ -57,14 +63,16 @@ def process():
     ds_flag = xr.open_dataset(flag_file, engine='cfgrib')
     
     ref = ds_ref[list(ds_ref.data_vars)[0]]
+    # Interpolate flag to match ref grid exactly
     flag = ds_flag[list(ds_flag.data_vars)[0]].interp_like(ref, method='nearest')
 
     lats, lons = ref.latitude.values, ref.longitude.values
     lons = np.where(lons > 180, lons - 360, lons)
     ext = [lons.min(), lons.max(), lats.min(), lats.max()]
 
-    # HIGH RES FIGURE: Increase DPI and use a larger figsize for sharpness
-    fig = plt.figure(figsize=(24, 12), dpi=600)
+    # ULTRA HIGH RES FIGURE (Fixes "Zoomed in" look)
+    # 30x15 at 300 DPI creates a massive 9000px wide image
+    fig = plt.figure(figsize=(30, 15), dpi=300)
     ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
     ax.set_xlim(ext[0], ext[1])
     ax.set_ylim(ext[2], ext[3])
@@ -72,29 +80,31 @@ def process():
     ref_v = ref.values
     flag_v = flag.values
     
-    # Filter out weak echoes (below 5dBZ) to keep the map clean
-    ref_v[ref_v < 5] = np.nan
+    # Hide noise (clutter) below 10 dBZ
+    ref_v[ref_v < 10] = np.nan
 
-    # PLOT LAYERS with 'nearest' interpolation for sharpness
+    # PLOT LAYERS
+    # interpolation='none' ensures no "blurry" blending between colors
     # Rain (Flag 1)
     ax.imshow(np.where(flag_v == 1, ref_v, np.nan), extent=ext, origin='upper', 
-              cmap=cmap_rain, norm=mcolors.Normalize(5, 75), interpolation='nearest', zorder=1)
+              cmap=cmap_rain, norm=mcolors.Normalize(10, 75), interpolation='none', zorder=1)
+    
     # Snow (Flag 2)
     ax.imshow(np.where(flag_v == 2, ref_v, np.nan), extent=ext, origin='upper', 
-              cmap=cmap_snow, norm=mcolors.Normalize(5, 75), interpolation='nearest', zorder=2)
-    # Mix/Ice (Flag 3, 4, etc)
+              cmap=cmap_snow, norm=mcolors.Normalize(10, 50), interpolation='none', zorder=2)
+    
+    # Mix/Ice (Flag 3+)
     ax.imshow(np.where(flag_v >= 3, ref_v, np.nan), extent=ext, origin='upper', 
-              cmap=cmap_mix, norm=mcolors.Normalize(5, 75), interpolation='nearest', zorder=3)
+              cmap=cmap_mix, norm=mcolors.Normalize(10, 50), interpolation='none', zorder=3)
 
     master_path = os.path.join(OUTPUT_DIR, "master.png")
-    # Save with high DPI to prevent the 'zoomed in' look
-    plt.savefig(master_path, transparent=True, pad_inches=0, dpi=600)
+    plt.savefig(master_path, transparent=True, pad_inches=0)
     plt.close()
 
-    # Generate metadata
+    # Create metadata for Leaflet
     meta = {
         "bounds": [[float(lats.min()), float(lons.min())], [float(lats.max()), float(lons.max())]],
-        "time": datetime.now().strftime("%H:%M UTC")
+        "time": datetime.now().strftime("%I:%M %p UTC")
     }
     with open(os.path.join(OUTPUT_DIR, "metadata_0.json"), "w") as f:
         json.dump(meta, f)
