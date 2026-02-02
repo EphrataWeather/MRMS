@@ -1,29 +1,25 @@
 name: Radar Update
 on:
   schedule:
-    - cron: '*/10 * * * *' # Runs every 10 mins
-  workflow_dispatch:      # Allows you to run it manually
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
   pages: write
   id-token: write
 
-# Prevents multiple deployments from running at once
 concurrency:
   group: "pages"
   cancel-in-progress: true
 
 jobs:
   build_and_deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Important for pushing changes back
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -37,41 +33,37 @@ jobs:
       - name: Rotate 10 Frames of History
         run: |
           mkdir -p public/data/tiles_0
-          # Shift existing data 0->1, 1->2... up to 9
           for i in {8..0}; do
             next=$((i+1))
             if [ -d "public/data/tiles_$i" ] || [ -f "public/data/metadata_$i.json" ]; then
-              echo "Moving frame $i to $next"
               rm -rf public/data/tiles_$next
               mv public/data/tiles_$i public/data/tiles_$next 2>/dev/null || true
               mv public/data/master_$i.png public/data/master_$next.png 2>/dev/null || true
-              # Special case for the very first master file which doesn't have an index
               [ -f public/data/master.png ] && [ $i -eq 0 ] && mv public/data/master.png public/data/master_1.png || true
               mv public/data/metadata_$i.json public/data/metadata_$next.json 2>/dev/null || true
             fi
           done
-          # Ensure fresh start for the new scan
           mkdir -p public/data/tiles_0
 
       - name: Run Processing Script
         run: python scripts/process_mrms.py
 
-      - name: Commit and Push History
+      - name: Commit and Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add public/data/
-          git commit -m "Radar Update: Frame Rotation [skip ci]" || echo "No changes to commit"
+          git commit -m "Radar Update [skip ci]" || echo "No changes"
           git push origin main
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       - name: Upload Artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v3 # UPGRADED
         with:
           path: '.'
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v4 # UPGRADED
