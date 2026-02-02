@@ -54,10 +54,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "Radar Update $(date)" || echo "No changes"
+          git add public/data/
+          git commit -m "Radar History Update [skip ci]" || echo "No changes"
           git push
-
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
