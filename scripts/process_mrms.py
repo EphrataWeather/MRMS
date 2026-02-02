@@ -60,6 +60,8 @@ def slice_to_tiles(image_path, frame_dir):
             # Save as tile_row_col.png
             tile.save(os.path.join(frame_dir, f"tile_{r}_{c}.png"))
 
+# ... (Keep the imports and top part of the script from the previous message)
+
 def process():
     ref_file = download_and_extract(get_latest_urls("MergedReflectivityQCComposite"), "ref")
     flag_file = download_and_extract(get_latest_urls("PrecipFlag"), "flag")
@@ -76,7 +78,6 @@ def process():
     lons = np.where(lons > 180, lons - 360, lons)
     ext = [lons.min(), lons.max(), lats.min(), lats.max()]
 
-    # 1. Create High-Res Master
     fig = plt.figure(figsize=(24, 12), dpi=300)
     ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
     ax.set_xlim(ext[0], ext[1])
@@ -84,21 +85,26 @@ def process():
 
     ref_v = ref.values
     flag_v = flag.values
-    ref_v[ref_v < 10] = np.nan 
+    ref_v[ref_v < 5] = np.nan # Drop very noisy low DBZ
 
-    # Plot (Merged Snow/Mix logic)
-    ax.imshow(np.where(flag_v == 1, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_rain, norm=mcolors.Normalize(10, 75), interpolation='nearest')
-    ax.imshow(np.where((flag_v == 2) | (flag_v == 3), ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_snow, norm=mcolors.Normalize(10, 50), interpolation='nearest')
-    ax.imshow(np.where(flag_v >= 4, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_mix, norm=mcolors.Normalize(10, 50), interpolation='nearest')
+    # --- Mapped Logic from your provided table ---
+    # Rain Flags: 1, 6, 10, 91, 96
+    rain_mask = np.isin(flag_v, [1, 6, 10, 91, 96])
+    # Snow Flags: 3
+    snow_mask = (flag_v == 3)
+    # Mix/Hail Flags: 7
+    mix_mask = (flag_v == 7)
+
+    ax.imshow(np.where(rain_mask, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_rain, norm=mcolors.Normalize(10, 75), interpolation='nearest')
+    ax.imshow(np.where(snow_mask, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_snow, norm=mcolors.Normalize(10, 50), interpolation='nearest')
+    ax.imshow(np.where(mix_mask, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_mix, norm=mcolors.Normalize(10, 60), interpolation='nearest')
 
     master_path = os.path.join(OUTPUT_DIR, "master.png")
     plt.savefig(master_path, transparent=True, pad_inches=0)
     plt.close()
 
-    # 2. Slice the Master into Tiles (User Request)
     slice_to_tiles(master_path, TILE_DIR)
 
-    # 3. Save Metadata
     meta = {
         "bounds": [[float(lats.min()), float(lons.min())], [float(lats.max()), float(lons.max())]],
         "time": datetime.now().strftime("%I:%M %p"),
@@ -106,6 +112,3 @@ def process():
     }
     with open(os.path.join(OUTPUT_DIR, "metadata_0.json"), "w") as f:
         json.dump(meta, f)
-
-if __name__ == "__main__":
-    process()
