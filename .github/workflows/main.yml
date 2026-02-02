@@ -9,19 +9,18 @@ permissions:
   pages: write
   id-token: write
 
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
-
+# Increased simplicity to avoid runner hangs
 jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -30,17 +29,15 @@ jobs:
           sudo apt-get update && sudo apt-get install -y libeccodes-dev
           pip install xarray cfgrib numpy matplotlib Pillow beautifulsoup4 requests scipy
 
-      - name: Rotate 10 Frames of History
+      - name: Rotate History
         run: |
           mkdir -p public/data/tiles_0
-          # Move old frames forward (8->9, 7->8...)
           for i in {8..0}; do
             next=$((i+1))
             if [ -d "public/data/tiles_$i" ] || [ -f "public/data/metadata_$i.json" ]; then
               rm -rf public/data/tiles_$next
               mv public/data/tiles_$i public/data/tiles_$next 2>/dev/null || true
               mv public/data/master_$i.png public/data/master_$next.png 2>/dev/null || true
-              # Rename the very first master.png to master_1.png
               [ -f public/data/master.png ] && [ $i -eq 0 ] && mv public/data/master.png public/data/master_1.png || true
               mv public/data/metadata_$i.json public/data/metadata_$next.json 2>/dev/null || true
             fi
@@ -50,7 +47,7 @@ jobs:
       - name: Run Processing Script
         run: python scripts/process_mrms.py
 
-      - name: Commit and Push
+      - name: Commit Changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -61,9 +58,8 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      # THIS FIXES THE QUEUE HANG:
       - name: Upload Artifact
-        uses: actions/upload-pages-artifact@v3 
+        uses: actions/upload-pages-artifact@v3
         with:
           path: '.'
 
