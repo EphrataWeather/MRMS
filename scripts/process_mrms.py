@@ -8,81 +8,51 @@ import matplotlib.colors as mcolors
 from PIL import Image
 from datetime import datetime
 from bs4 import BeautifulSoup
-import time
 
-# --- CONFIGURATION ---
+# --- CONFIG ---
 BASE_URL = "https://mrms.ncep.noaa.gov/data/2D/"
 REF_PROD = "MergedReflectivityQCComposite"
 FLAG_PROD = "PrecipFlag"
 OUTPUT_DIR = "public/data"
 TILE_DIR = os.path.join(OUTPUT_DIR, "tiles_0")
-
 os.makedirs(TILE_DIR, exist_ok=True)
 
+# --- PROFESSIONAL COLOR TABLES ---
+# Rain: Green -> Yellow -> Red
+cmap_rain = mcolors.LinearSegmentedColormap.from_list('rain', ["#00fb90", "#00bb00", "#ffff00", "#ff0000", "#b90000"], N=256)
+# Snow: Light Blue -> Deep Blue -> White
+cmap_snow = mcolors.LinearSegmentedColormap.from_list('snow', ["#00dcf5", "#005df5", "#002df5", "#ffffff"], N=256)
+# Ice/Mix: Pink -> Bright Purple
+cmap_mix = mcolors.LinearSegmentedColormap.from_list('mix', ["#ff00f6", "#9a00f6", "#5500a1"], N=256)
+
 def get_latest_urls(prod):
-    """Scrapes the MRMS directory and returns a list of recent files."""
     url = f"{BASE_URL}{prod}/"
     try:
         r = requests.get(url, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         links = [a['href'] for a in soup.find_all('a') if a['href'].endswith('.grib2.gz')]
-        # Return full URLs sorted newest to oldest
         return [url + l for l in sorted(links, reverse=True)]
-    except Exception as e:
-        print(f"Error scraping {prod}: {e}")
-        return []
+    except: return []
 
-def download_with_retry(urls, name):
-    """Tries downloading the newest file; if 404, tries the next one."""
+def download_and_extract(urls, name):
     for url in urls:
         fn = f"{name}.grib2.gz"
-        print(f"Attempting to download {name}: {url}")
         try:
             r = requests.get(url, stream=True, timeout=10)
             if r.status_code == 200:
                 with open(fn, 'wb') as f:
-                    for chunk in r.iter_content(8192):
-                        f.write(chunk)
+                    for chunk in r.iter_content(8192): f.write(chunk)
                 os.system(f"gunzip -f {fn}")
                 return f"{name}.grib2"
-            else:
-                print(f"Skipping {url} (Status: {r.status_code})")
-        except Exception as e:
-            print(f"Failed {url}: {e}")
+        except: continue
     return None
 
-def slice_to_tiles(image_path, frame_dir):
-    img = Image.open(image_path)
-    w, h = img.size
-    rows, cols = 4, 4
-    tile_w, tile_h = w // cols, h // rows
-    tile_paths = []
-    for r in range(rows):
-        for c in range(cols):
-            tile = img.crop((c * tile_w, r * tile_h, (c + 1) * tile_w, (r + 1) * tile_h))
-            name = f"tile_{r}_{c}.png"
-            tile.save(os.path.join(frame_dir, name))
-            tile_paths.append({"row": r, "col": c, "url": f"data/tiles_0/{name}"})
-    return tile_paths
-
 def process():
-    # Get lists of files
-    ref_urls = get_latest_urls(REF_PROD)
-    flag_urls = get_latest_urls(FLAG_PROD)
+    ref_file = download_and_extract(get_latest_urls(REF_PROD), "ref")
+    flag_file = download_and_extract(get_latest_urls(FLAG_PROD), "flag")
     
-    if not ref_urls or not flag_urls:
-        print("Could not find file lists.")
-        return
+    if not ref_file or not flag_file: return
 
-    # Download with fallback logic
-    ref_file = download_with_retry(ref_urls, "ref")
-    flag_file = download_with_retry(flag_urls, "flag")
-    
-    if not ref_file or not flag_file:
-        print("Failed to download one or both products.")
-        return
-
-    # Open Datasets
     ds_ref = xr.open_dataset(ref_file, engine='cfgrib')
     ds_flag = xr.open_dataset(flag_file, engine='cfgrib')
     
@@ -93,35 +63,41 @@ def process():
     lons = np.where(lons > 180, lons - 360, lons)
     ext = [lons.min(), lons.max(), lats.min(), lats.max()]
 
-    # Visualization
-    fig = plt.figure(figsize=(20, 10))
+    # HIGH RES FIGURE: Increase DPI and use a larger figsize for sharpness
+    fig = plt.figure(figsize=(24, 12), dpi=600)
     ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
     ax.set_xlim(ext[0], ext[1])
     ax.set_ylim(ext[2], ext[3])
 
-    ref_v, flag_v = ref.values, flag.values
+    ref_v = ref.values
+    flag_v = flag.values
     
-    # Layering
-    ax.imshow(np.where((flag_v == 1) & (ref_v > 0), ref_v, np.nan), extent=ext, origin='upper', cmap='nipy_spectral', norm=mcolors.Normalize(0, 75))
-    ax.imshow(np.where((flag_v == 2) & (ref_v > 0), ref_v, np.nan), extent=ext, origin='upper', cmap='Blues', norm=mcolors.Normalize(0, 75))
-    ax.imshow(np.where((flag_v >= 3) & (ref_v > 0), ref_v, np.nan), extent=ext, origin='upper', cmap='RdPu', norm=mcolors.Normalize(0, 75))
+    # Filter out weak echoes (below 5dBZ) to keep the map clean
+    ref_v[ref_v < 5] = np.nan
+
+    # PLOT LAYERS with 'nearest' interpolation for sharpness
+    # Rain (Flag 1)
+    ax.imshow(np.where(flag_v == 1, ref_v, np.nan), extent=ext, origin='upper', 
+              cmap=cmap_rain, norm=mcolors.Normalize(5, 75), interpolation='nearest', zorder=1)
+    # Snow (Flag 2)
+    ax.imshow(np.where(flag_v == 2, ref_v, np.nan), extent=ext, origin='upper', 
+              cmap=cmap_snow, norm=mcolors.Normalize(5, 75), interpolation='nearest', zorder=2)
+    # Mix/Ice (Flag 3, 4, etc)
+    ax.imshow(np.where(flag_v >= 3, ref_v, np.nan), extent=ext, origin='upper', 
+              cmap=cmap_mix, norm=mcolors.Normalize(5, 75), interpolation='nearest', zorder=3)
 
     master_path = os.path.join(OUTPUT_DIR, "master.png")
-    plt.savefig(master_path, transparent=True, pad_inches=0, dpi=400)
+    # Save with high DPI to prevent the 'zoomed in' look
+    plt.savefig(master_path, transparent=True, pad_inches=0, dpi=600)
     plt.close()
 
-    # Tiling & Metadata
-    tiles = slice_to_tiles(master_path, TILE_DIR)
+    # Generate metadata
     meta = {
-        "tiles": tiles, 
         "bounds": [[float(lats.min()), float(lons.min())], [float(lats.max()), float(lons.max())]],
         "time": datetime.now().strftime("%H:%M UTC")
     }
-    
     with open(os.path.join(OUTPUT_DIR, "metadata_0.json"), "w") as f:
         json.dump(meta, f)
-    
-    print(f"Success! Data saved at {meta['time']}")
 
 if __name__ == "__main__":
     process()
