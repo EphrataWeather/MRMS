@@ -78,8 +78,8 @@ def process():
     # Plotting using the professional binned color maps
     # Nearest interpolation prevents "blur" between rain and snow
     ax.imshow(np.where(flag_v == 1, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_rain, norm=mcolors.Normalize(10, 75), interpolation='nearest')
-    ax.imshow(np.where(flag_v == 2, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_snow, norm=mcolors.Normalize(10, 50), interpolation='nearest')
-    ax.imshow(np.where(flag_v >= 3, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_mix, norm=mcolors.Normalize(10, 50), interpolation='nearest')
+    ax.imshow(np.where(flag_v == 3, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_snow, norm=mcolors.Normalize(10, 50), interpolation='nearest')
+    ax.imshow(np.where(flag_v >= 2, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_mix, norm=mcolors.Normalize(10, 50), interpolation='nearest')
 
     master_path = os.path.join(OUTPUT_DIR, "master.png")
     plt.savefig(master_path, transparent=True, pad_inches=0)
