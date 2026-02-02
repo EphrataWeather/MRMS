@@ -1,104 +1,158 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>High-Res Loop Radar</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live MRMS Radar Loop</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; background: #0c0c0c; font-family: 'Segoe UI', sans-serif; }
-        #map { height: 100vh; width: 100%; }
-        .ui-panel {
-            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
-            z-index: 1000; background: rgba(20,20,20,0.95); padding: 15px 25px;
-            border-radius: 50px; display: flex; align-items: center; gap: 20px;
-            border: 1px solid #444; box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        :root {
+            --bg-color: #0b0b0b;
+            --text-color: #ffffff;
+            --accent-color: #00fb90;
         }
-        .legend {
-            position: absolute; top: 20px; right: 20px; z-index: 1000;
-            background: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px; color: white;
+        body { margin: 0; padding: 0; background: var(--bg-color); font-family: sans-serif; }
+        #map { height: 100vh; width: 100%; background: var(--bg-color); }
+
+        /* UI Overlay */
+        .overlay {
+            position: absolute;
+            top: 10px;
+            left: 50px;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            color: var(--text-color);
+            border: 1px solid #333;
+            pointer-events: none;
         }
-        .dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 8px; }
-        #timeLabel { color: #00ff00; font-weight: bold; min-width: 80px; text-align: center; }
-        button { background: #444; color: white; border: none; padding: 8px 20px; border-radius: 20px; cursor: pointer; transition: 0.2s; }
-        button:hover { background: #666; }
+
+        .status-pill {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            background: var(--accent-color);
+            color: #000;
+            margin-bottom: 5px;
+        }
+
+        #timestamp { font-size: 18px; font-weight: bold; display: block; }
+        #frame-info { font-size: 12px; opacity: 0.7; }
+
+        /* Loading Spinner */
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2000;
+            color: white;
+            background: rgba(0,0,0,0.7);
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+        }
+
+        /* Sharp Radar Pixels */
         .leaflet-image-layer {
-    image-rendering: -webkit-optimize-contrast;
-    image-rendering: pixelated; /* Sharpens the radar overlay */
-    image-rendering: crisp-edges;
-}
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            transition: opacity 0.2s ease-in-out;
+        }
     </style>
 </head>
 <body>
-    <div class="legend">
-        <div><span class="dot" style="background:#00ff00"></span> Rain</div>
-        <div><span class="dot" style="background:#ff00ff"></span> Mix / Ice</div>
-        <div><span class="dot" style="background:#00ccff"></span> Snow</div>
-    </div>
 
-    <div class="ui-panel">
-        <button onclick="togglePlay()" id="playBtn">Play Loop</button>
-        <input type="range" id="slider" min="0" max="4" value="0" oninput="showFrame(this.value)">
-        <span id="timeLabel">LIVE</span>
+    <div id="loader">Updating Radar...</div>
+
+    <div class="overlay">
+        <div class="status-pill">LIVE MRMS</div>
+        <span id="timestamp">Loading...</span>
+        <span id="frame-info">Initializing loop...</span>
     </div>
 
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        const map = L.map('map', { zoomSnap: 0.1 }).setView([38, -97], 4.5);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+        const map = L.map('map', {
+            zoomControl: false,
+            attributionControl: false
+        }).setView([38.0, -96.0], 4);
 
-        let frames = []; // Array of layer groups
-        let isPlaying = false;
-        let loopTimer;
+        // Dark-themed base map
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
+        // Add labels on top of radar
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { zIndex: 1000 }).addTo(map);
 
-        async function init() {
-            for(let i=0; i<5; i++) {
-                const group = L.layerGroup().addTo(map);
-                frames.push(group);
+        let frames = [];
+        let currentFrameIndex = 0;
+        let layerGroup = L.layerGroup().addTo(map);
+        const MAX_FRAMES = 5;
+
+        async function loadFrames() {
+            document.getElementById('loader').style.display = 'block';
+            const loadedFrames = [];
+
+            for (let i = 0; i < MAX_FRAMES; i++) {
                 try {
-                    const r = await fetch(`data/metadata_${i}.json?t=${Date.now()}`);
-                    const d = await r.json();
+                    // Try to fetch metadata for each frame (0-4)
+                    const response = await fetch(`public/data/metadata_${i}.json?t=${Date.now()}`);
+                    if (!response.ok) continue;
                     
-                    const [s, w] = d.bounds[0];
-                    const [n, e] = d.bounds[1];
-                    const latStep = (n-s)/4;
-                    const lonStep = (e-w)/4;
-
-                    d.tiles.forEach(t => {
-                        const ts = n - ((t.row + 1) * latStep);
-                        const tn = n - (t.row * latStep);
-                        const tw = w + (t.col * lonStep);
-                        const te = w + ((t.col + 1) * lonStep);
-                        // Using the path logic from the rotation
-                        const url = `data/tiles_${i}/${t.url.split('/').pop()}`;
-                        L.imageOverlay(url, [[ts, tw], [tn, te]], {opacity: 0.8}).addTo(group);
+                    const meta = await response.json();
+                    // Each frame needs its own master image path
+                    // Note: If you renamed your master images to master_0.png, master_1.png in Python, update here:
+                    const imageUrl = i === 0 ? 'public/data/master.png' : `public/data/master_${i}.png`;
+                    
+                    loadedFrames.push({
+                        url: imageUrl,
+                        bounds: meta.bounds,
+                        time: meta.time
                     });
-                } catch(err) { console.log(`Frame ${i} missing`); }
+                } catch (e) {
+                    console.log(`Frame ${i} not found yet.`);
+                }
             }
-            showFrame(0);
+
+            if (loadedFrames.length > 0) {
+                frames = loadedFrames.reverse(); // Show oldest to newest
+                startLoop();
+            }
+            document.getElementById('loader').style.display = 'none';
         }
 
-        function showFrame(val) {
-            frames.forEach((g, i) => {
-                g.eachLayer(l => l.setOpacity(i == val ? 0.8 : 0));
-            });
-            document.getElementById('timeLabel').innerText = val == 0 ? "LIVE" : `-${val*10}m`;
+        function startLoop() {
+            if (frames.length === 0) return;
+
+            setInterval(() => {
+                const frame = frames[currentFrameIndex];
+                
+                // Remove old radar images
+                layerGroup.clearLayers();
+
+                // Add current frame
+                L.imageOverlay(frame.url, frame.bounds, {
+                    opacity: 0.8,
+                    interactive: false
+                }).addTo(layerGroup);
+
+                // Update UI
+                document.getElementById('timestamp').innerText = frame.time;
+                document.getElementById('frame-info').innerText = `Frame ${currentFrameIndex + 1} of ${frames.length}`;
+
+                currentFrameIndex = (currentFrameIndex + 1) % frames.length;
+            }, 800); // Speed of loop (800ms)
         }
 
-        function togglePlay() {
-            isPlaying = !isPlaying;
-            document.getElementById('playBtn').innerText = isPlaying ? "Stop" : "Play Loop";
-            if(isPlaying) {
-                let c = 4;
-                loopTimer = setInterval(() => {
-                    showFrame(c);
-                    document.getElementById('slider').value = c;
-                    c = c <= 0 ? 4 : c - 1;
-                }, 600);
-            } else { clearInterval(loopTimer); }
-        }
-
-        init();
+        // Initial load
+        loadFrames();
+        
+        // Refresh data every 5 minutes
+        setInterval(loadFrames, 300000);
     </script>
 </body>
 </html>
