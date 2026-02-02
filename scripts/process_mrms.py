@@ -11,15 +11,19 @@ from bs4 import BeautifulSoup
 
 # --- CONFIG ---
 OUTPUT_DIR = "public/data"
-# We always write to tiles_0; the YAML moves this folder to tiles_1, tiles_2...
 TILE_DIR = os.path.join(OUTPUT_DIR, "tiles_0")
 os.makedirs(TILE_DIR, exist_ok=True)
 
-# --- COLORS (AccuWeather Style) ---
+# --- COLORS ---
+# Rain (Green -> Red)
 rain_colors = ['#00FB90', '#00BB00', '#FFFF00', '#FF8C00', '#FF0000', '#B90000']
 cmap_rain = mcolors.ListedColormap(rain_colors)
+
+# Snow (Blue -> White)
 snow_colors = ['#00008B', '#0000FF', '#4169E1', '#ADD8E6', '#FFFFFF']
 cmap_snow = mcolors.ListedColormap(snow_colors)
+
+# Mix (Pink/Purple)
 mix_colors = ['#FF69B4', '#FF00FF', '#9A00F6', '#4B0082']
 cmap_mix = mcolors.ListedColormap(mix_colors)
 
@@ -46,7 +50,6 @@ def download_and_extract(urls, name):
     return None
 
 def slice_to_tiles(image_path, frame_dir):
-    """Slices master.png into 4x4 tiles."""
     img = Image.open(image_path)
     w, h = img.size
     rows, cols = 4, 4
@@ -57,10 +60,7 @@ def slice_to_tiles(image_path, frame_dir):
             left, upper = c * tile_w, r * tile_h
             right, lower = left + tile_w, upper + tile_h
             tile = img.crop((left, upper, right, lower))
-            # Save as tile_row_col.png
             tile.save(os.path.join(frame_dir, f"tile_{r}_{c}.png"))
-
-# ... (Keep the imports and top part of the script from the previous message)
 
 def process():
     ref_file = download_and_extract(get_latest_urls("MergedReflectivityQCComposite"), "ref")
@@ -85,19 +85,20 @@ def process():
 
     ref_v = ref.values
     flag_v = flag.values
-    ref_v[ref_v < 5] = np.nan # Drop very noisy low DBZ
+    ref_v[ref_v < 10] = np.nan 
 
-    # --- Mapped Logic from your provided table ---
-    # Rain Flags: 1, 6, 10, 91, 96
+    # --- STRICT FLAG MAPPING FROM YOUR TABLE ---
+    # Rain: 1, 6, 10, 91, 96
     rain_mask = np.isin(flag_v, [1, 6, 10, 91, 96])
-    # Snow Flags: 3
+    # Snow: 3
     snow_mask = (flag_v == 3)
-    # Mix/Hail Flags: 7
+    # Mix: 7
     mix_mask = (flag_v == 7)
 
+    # Plot Layers
     ax.imshow(np.where(rain_mask, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_rain, norm=mcolors.Normalize(10, 75), interpolation='nearest')
     ax.imshow(np.where(snow_mask, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_snow, norm=mcolors.Normalize(10, 50), interpolation='nearest')
-    ax.imshow(np.where(mix_mask, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_mix, norm=mcolors.Normalize(10, 60), interpolation='nearest')
+    ax.imshow(np.where(mix_mask, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_mix, norm=mcolors.Normalize(10, 50), interpolation='nearest')
 
     master_path = os.path.join(OUTPUT_DIR, "master.png")
     plt.savefig(master_path, transparent=True, pad_inches=0)
@@ -112,3 +113,6 @@ def process():
     }
     with open(os.path.join(OUTPUT_DIR, "metadata_0.json"), "w") as f:
         json.dump(meta, f)
+
+if __name__ == "__main__":
+    process()
