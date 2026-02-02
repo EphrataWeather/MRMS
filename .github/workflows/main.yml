@@ -34,12 +34,17 @@ jobs:
 
       - name: Rotate Data folders
         run: |
+          # Create folders if they don't exist
           mkdir -p public/data/tiles_0 public/data/tiles_1 public/data/tiles_2 public/data/tiles_3 public/data/tiles_4
+          
+          # Shift existing data (4 is deleted, 3 becomes 4, etc.)
           rm -rf public/data/tiles_4 public/data/metadata_4.json || true
           [ -f public/data/metadata_3.json ] && mv public/data/tiles_3 public/data/tiles_4 && mv public/data/metadata_3.json public/data/metadata_4.json || true
           [ -f public/data/metadata_2.json ] && mv public/data/tiles_2 public/data/tiles_3 && mv public/data/metadata_2.json public/data/metadata_3.json || true
           [ -f public/data/metadata_1.json ] && mv public/data/tiles_1 public/data/tiles_2 && mv public/data/metadata_1.json public/data/metadata_2.json || true
           [ -f public/data/metadata_0.json ] && mv public/data/tiles_0 public/data/tiles_1 && mv public/data/metadata_0.json public/data/metadata_1.json || true
+          
+          # Fresh start for the current run
           mkdir -p public/data/tiles_0
 
       - name: Run Radar Script
