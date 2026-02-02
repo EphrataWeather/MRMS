@@ -9,45 +9,36 @@ permissions:
   pages: write
   id-token: write
 
-# Increased simplicity to avoid runner hangs
 jobs:
   build_and_deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04 # Changed from latest to force a specific stable runner
+    timeout-minutes: 15   # Automatically kills it if it hangs so you don't wait 20 mins
+    
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1 # Only get the latest commit to speed up the start
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install System Dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y libeccodes-dev
-          pip install xarray cfgrib numpy matplotlib Pillow beautifulsoup4 requests scipy
+          # Use -qq for "quite quiet" to prevent log bloat that can hang runners
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libeccodes-dev
 
-      - name: Rotate History
+      - name: Install Python Dependencies
         run: |
-          mkdir -p public/data/tiles_0
-          for i in {8..0}; do
-            next=$((i+1))
-            if [ -d "public/data/tiles_$i" ] || [ -f "public/data/metadata_$i.json" ]; then
-              rm -rf public/data/tiles_$next
-              mv public/data/tiles_$i public/data/tiles_$next 2>/dev/null || true
-              mv public/data/master_$i.png public/data/master_$next.png 2>/dev/null || true
-              [ -f public/data/master.png ] && [ $i -eq 0 ] && mv public/data/master.png public/data/master_1.png || true
-              mv public/data/metadata_$i.json public/data/metadata_$next.json 2>/dev/null || true
-            fi
-          done
-          mkdir -p public/data/tiles_0
+          pip install --no-cache-dir xarray cfgrib numpy matplotlib Pillow beautifulsoup4 requests scipy
 
       - name: Run Processing Script
         run: python scripts/process_mrms.py
 
-      - name: Commit Changes
+      - name: Commit and Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
