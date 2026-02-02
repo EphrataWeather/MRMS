@@ -11,19 +11,18 @@ from bs4 import BeautifulSoup
 
 # --- CONFIG ---
 OUTPUT_DIR = "public/data"
-TILE_DIR = os.path.join(OUTPUT_DIR, "tiles_0")
-os.makedirs(TILE_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# --- ACCUWEATHER STYLE COLOR BINS ---
-# Rain (Flag 1): Greens to Reds
+# --- ACCUWEATHER / WEATHER CHANNEL STYLE BINS ---
+# Rain: Shades of Green/Yellow/Red
 rain_colors = ['#00FB90', '#00BB00', '#FFFF00', '#FF8C00', '#FF0000', '#B90000']
 cmap_rain = mcolors.ListedColormap(rain_colors)
 
-# Snow (Flag 2): Deep Blue to White (NO PURPLES HERE)
+# Snow: Deep Blues and Whites (Merged Flag 2 & 3)
 snow_colors = ['#00008B', '#0000FF', '#4169E1', '#ADD8E6', '#FFFFFF']
 cmap_snow = mcolors.ListedColormap(snow_colors)
 
-# Mix/Ice (Flag 3+): Hot Pinks and Purples
+# Ice/Mix: Hot Pinks and Purples (Flag 4+)
 mix_colors = ['#FF69B4', '#FF00FF', '#9A00F6', '#4B0082']
 cmap_mix = mcolors.ListedColormap(mix_colors)
 
@@ -65,7 +64,6 @@ def process():
     lons = np.where(lons > 180, lons - 360, lons)
     ext = [lons.min(), lons.max(), lats.min(), lats.max()]
 
-    # High-Res 4K-style output
     fig = plt.figure(figsize=(24, 12), dpi=300)
     ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
     ax.set_xlim(ext[0], ext[1])
@@ -75,17 +73,20 @@ def process():
     flag_v = flag.values
     ref_v[ref_v < 10] = np.nan 
 
-    # Plotting using the professional binned color maps
-    # Nearest interpolation prevents "blur" between rain and snow
+    # --- UPDATED LOGIC TO FIX SNOW/MIX CONFUSION ---
+    # Flag 1: Rain
     ax.imshow(np.where(flag_v == 1, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_rain, norm=mcolors.Normalize(10, 75), interpolation='nearest')
-    ax.imshow(np.where(flag_v == 3, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_snow, norm=mcolors.Normalize(10, 50), interpolation='nearest')
-    ax.imshow(np.where(flag_v >= 2, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_mix, norm=mcolors.Normalize(10, 50), interpolation='nearest')
+    
+    # Flag 2 AND 3: Snow (This treats the "Mix" flag as snow for better visuals)
+    ax.imshow(np.where((flag_v == 2) | (flag_v == 3), ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_snow, norm=mcolors.Normalize(10, 50), interpolation='nearest')
+    
+    # Flag 4+: Ice/Sleet (The true "Mix" visuals)
+    ax.imshow(np.where(flag_v >= 4, ref_v, np.nan), extent=ext, origin='upper', cmap=cmap_mix, norm=mcolors.Normalize(10, 50), interpolation='nearest')
 
     master_path = os.path.join(OUTPUT_DIR, "master.png")
     plt.savefig(master_path, transparent=True, pad_inches=0)
     plt.close()
 
-    # Create metadata
     meta = {
         "bounds": [[float(lats.min()), float(lons.min())], [float(lats.max()), float(lons.max())]],
         "time": datetime.now().strftime("%I:%M %p")
