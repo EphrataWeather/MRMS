@@ -1,59 +1,67 @@
-name: Radar Update
+name: Update Weather Data
+
 on:
   schedule:
-    - cron: '*/10 * * * *'
-  workflow_dispatch:
+    - cron: '*/10 * * * *' # Runs every 10 minutes
+  workflow_dispatch: # Allows manual trigger
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 jobs:
-  build_and_deploy:
-    runs-on: ubuntu-22.04 # Changed from latest to force a specific stable runner
-    timeout-minutes: 15   # Automatically kills it if it hangs so you don't wait 20 mins
-    
+  build:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1 # Only get the latest commit to speed up the start
+          fetch-depth: 1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
       - name: Install System Dependencies
         run: |
-          # Use -qq for "quite quiet" to prevent log bloat that can hang runners
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libeccodes-dev
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev eccodes
 
       - name: Install Python Dependencies
         run: |
-          pip install --no-cache-dir xarray cfgrib numpy matplotlib Pillow beautifulsoup4 requests scipy
+          pip install numpy xarray cfgrib matplotlib requests beautifulsoup4 pillow
+
+      - name: Rotate Old Data
+        run: |
+          # Create directories if they don't exist
+          mkdir -p public/data/tiles_0
+          
+          # Only rotate if we have existing data
+          if [ -f "public/data/metadata_0.json" ]; then
+            echo "Rotating history frames..."
+            for i in {8..0}; do
+              next=$((i+1))
+              # Move Tiles
+              [ -d "public/data/tiles_$i" ] && rm -rf "public/data/tiles_$next" && mv "public/data/tiles_$i" "public/data/tiles_$next" || true
+              # Move Images
+              [ -f "public/data/master_$i.png" ] && mv "public/data/master_$i.png" "public/data/master_$next.png" || true
+              # Handle the special case for the current master.png
+              if [ $i -eq 0 ] && [ -f "public/data/master.png" ]; then
+                mv "public/data/master.png" "public/data/master_1.png"
+              fi
+              # Move Metadata
+              [ -f "public/data/metadata_$i.json" ] && mv "public/data/metadata_$i.json" "public/data/metadata_$next.json" || true
+            done
+          fi
+          mkdir -p public/data/tiles_0
 
       - name: Run Processing Script
         run: python scripts/process_mrms.py
 
       - name: Commit and Push
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add public/data/
-          git commit -m "Radar Update [skip ci]" || echo "No changes"
+          git config --global user.name "weather-bot"
+          git config --global user.email "bot@weather.com"
+          git add public/data/*
+          git commit -m "Update radar data: $(date)" || echo "No changes to commit"
           git push origin main
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload Artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: '.'
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
