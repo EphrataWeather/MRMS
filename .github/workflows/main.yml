@@ -22,10 +22,16 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install System Dependencies
+       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeccodes-dev libeccodes-tools
+          # We use libeccodes-dev instead of 'eccodes' to avoid the package not found error
+          sudo apt-get install -y libeccodes-dev
+
+      - name: Install Python Dependencies
+        run: |
+          # Added 'scipy' to the end of this list
+          pip install numpy xarray cfgrib matplotlib requests beautifulsoup4 pillow scipy
 
       - name: Install Python Dependencies
         run: |
