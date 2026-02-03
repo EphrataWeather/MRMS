@@ -33,10 +33,6 @@ jobs:
           # Added 'scipy' to the end of this list
           pip install numpy xarray cfgrib matplotlib requests beautifulsoup4 pillow scipy
 
-      - name: Install Python Dependencies
-        run: |
-          pip install numpy xarray cfgrib matplotlib requests beautifulsoup4 pillow
-
       - name: Rotate Old Data
         run: |
           # Create directories if they don't exist
