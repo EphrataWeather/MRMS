@@ -3,211 +3,117 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Radar Loop</title>
+    <title>Live MRMS Radar</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; background: #000; font-family: sans-serif; overflow: hidden; }
-        #map { height: 100vh; width: 100%; background: #000; }
+        body { margin: 0; background: #080808; font-family: -apple-system, sans-serif; color: white; }
+        #map { height: 100vh; width: 100%; }
         
-        /* Controls */
         .controls {
-            position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 90%;
-            max-width: 600px;
-            background: rgba(20, 20, 20, 0.9);
-            padding: 15px;
-            border-radius: 12px;
-            z-index: 1000;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            color: white;
-            border: 1px solid #333;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            width: 90%; max-width: 500px; background: rgba(0,0,0,0.85);
+            padding: 15px; border-radius: 12px; z-index: 1000;
+            display: flex; align-items: center; gap: 10px;
+            backdrop-filter: blur(5px); border: 1px solid #333;
         }
-        button {
-            background: #00fb90;
-            color: #000;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 6px;
-            font-weight: bold;
-            cursor: pointer;
-            text-transform: uppercase;
-            font-size: 12px;
+        button { 
+            background: #00fb90; border: none; padding: 8px 15px; 
+            border-radius: 5px; font-weight: bold; cursor: pointer;
         }
-        button:hover { background: #00ce76; }
-        input[type=range] { flex-grow: 1; cursor: pointer; accent-color: #00fb90; }
-        .time-display {
-            min-width: 85px;
-            text-align: right;
-            font-variant-numeric: tabular-nums;
-            font-weight: bold;
-            color: #00fb90;
+        input[type=range] { flex-grow: 1; accent-color: #00fb90; }
+        #time-label { min-width: 80px; text-align: right; font-family: monospace; font-size: 14px; }
+        #status {
+            position: absolute; top: 10px; left: 10px; z-index: 1000;
+            background: rgba(0,0,0,0.7); padding: 5px 10px; font-size: 12px;
+            border-radius: 4px; pointer-events: none; color: #00fb90;
         }
-
-        /* Debug / Loader */
-        #status-log {
-            position: absolute;
-            top: 10px; left: 10px;
-            color: #0f0;
-            background: rgba(0,0,0,0.8);
-            padding: 10px;
-            font-family: monospace;
-            font-size: 11px;
-            z-index: 2000;
-            border-radius: 4px;
-            pointer-events: none;
-            max-width: 300px;
-        }
-        .leaflet-image-layer { image-rendering: pixelated; }
     </style>
 </head>
 <body>
 
-    <div id="status-log">Initializing Map...</div>
+    <div id="status">Loading data...</div>
 
     <div class="controls">
-        <button id="playBtn" onclick="togglePlay()">Pause</button>
-        <input type="range" id="scrubber" min="0" max="0" value="0" step="1" oninput="scrub(this.value)">
-        <div class="time-display" id="timeDisplay">--:--</div>
+        <button id="playBtn">Pause</button>
+        <input type="range" id="scrubber" min="0" value="0">
+        <div id="time-label">--:--</div>
     </div>
 
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // 1. Setup Map (Dark Mode)
-        const map = L.map('map', { zoomControl: false }).setView([39.8, -98.6], 4);
+        const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([38.5, -96.5], 4);
         
-        // Dark Basemap
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
-            attribution: 'Map tiles by Carto, under CC BY 3.0. Data by OpenStreetMap, under ODbL.',
-            subdomains: 'abcd',
-            maxZoom: 19
-        }).addTo(map);
-
-        // Labels on top
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-            subdomains: 'abcd',
-            maxZoom: 19,
-            zIndex: 999
-        }).addTo(map);
+        // Dark Theme
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
         let frames = [];
-        let isPlaying = true;
         let currentIndex = 0;
-        let timer = null;
+        let isPlaying = true;
         let radarLayer = L.layerGroup().addTo(map);
-        let debugLayer = L.layerGroup().addTo(map);
 
-        function log(msg) {
-            const el = document.getElementById('status-log');
-            el.innerHTML += `<br>${msg}`;
-            console.log(msg);
-        }
-
-        async function initRadar() {
-            log("Checking for data...");
+        async function loadFrames() {
             const tempFrames = [];
-            const timestamp = Date.now(); // Cache buster
+            const timestamp = Date.now(); // Prevents browser caching
+            document.getElementById('status').innerText = "Syncing Frames...";
 
-            // We look for metadata_0.json through metadata_9.json
             for (let i = 0; i < 10; i++) {
                 try {
-                    const metaUrl = `public/data/metadata_${i}.json?t=${timestamp}`;
-                    const res = await fetch(metaUrl);
+                    // Path must match your repo structure exactly
+                    const path = `public/data/metadata_${i}.json?t=${timestamp}`;
+                    const res = await fetch(path);
                     if (res.ok) {
                         const meta = await res.json();
-                        // Frame 0 is master.png, others are master_X.png
-                        // CRITICAL: We add ?t=... to the image URL to force reload image
                         const imgUrl = (i === 0 ? 'public/data/master.png' : `public/data/master_${i}.png`) + `?t=${timestamp}`;
-                        
-                        tempFrames.push({ 
-                            url: imgUrl, 
-                            bounds: meta.bounds, 
-                            time: meta.time,
-                            index: i
-                        });
-                        log(`Found Frame ${i}: ${meta.time}`);
+                        tempFrames.push({ url: imgUrl, bounds: meta.bounds, time: meta.time });
                     }
-                } catch (e) { 
-                    // Frame missing, usually normal for startup
-                }
+                } catch (e) { console.log("Frame missing:", i); }
             }
 
             if (tempFrames.length > 0) {
-                // Reverse so index 0 is oldest time in the array
-                frames = tempFrames.reverse();
-                
-                const slider = document.getElementById('scrubber');
-                slider.max = frames.length - 1;
-                slider.value = frames.length - 1;
-                
-                currentIndex = frames.length - 1; // Start at newest
-                updateDisplay(currentIndex);
-                startLoop();
-                log(`Loaded ${frames.length} frames.`);
-            } else {
-                log("No data found yet. Retrying in 5s...");
-                setTimeout(initRadar, 5000);
+                frames = tempFrames.reverse(); // Newest at the end
+                document.getElementById('scrubber').max = frames.length - 1;
+                document.getElementById('status').innerText = `Live: ${frames.length} frames`;
+                if (!isPlaying) updateDisplay(currentIndex);
             }
         }
 
         function updateDisplay(index) {
+            if (!frames[index]) return;
             radarLayer.clearLayers();
-            debugLayer.clearLayers();
             
             const frame = frames[index];
-            if (frame) {
-                // 1. Add Radar Image
-                const img = L.imageOverlay(frame.url, frame.bounds, { 
-                    opacity: 0.8, 
-                    interactive: false 
-                }).addTo(radarLayer);
-
-                // 2. DEBUG: Draw a red box around where the image SHOULD be
-                // If you see the red box but no radar, the image is transparent or failing to load
-                // L.rectangle(frame.bounds, {color: "#ff0000", weight: 1, fill: false}).addTo(debugLayer);
-
-                document.getElementById('timeDisplay').innerText = frame.time;
-                document.getElementById('scrubber').value = index;
-            }
+            L.imageOverlay(frame.url, frame.bounds, { opacity: 0.8 }).addTo(radarLayer);
+            document.getElementById('time-label').innerText = frame.time;
+            document.getElementById('scrubber').value = index;
         }
 
-        function startLoop() {
-            if (timer) clearInterval(timer);
-            timer = setInterval(() => {
-                if (!isPlaying) return;
+        function animate() {
+            if (isPlaying && frames.length > 0) {
                 currentIndex = (currentIndex + 1) % frames.length;
                 updateDisplay(currentIndex);
-            }, 800);
+            }
+            setTimeout(() => requestAnimationFrame(animate), 600);
         }
 
-        function togglePlay() {
+        // Controls
+        document.getElementById('playBtn').onclick = (e) => {
             isPlaying = !isPlaying;
-            document.getElementById('playBtn').innerText = isPlaying ? "PAUSE" : "PLAY";
-        }
+            e.target.innerText = isPlaying ? "Pause" : "Play";
+        };
 
-        function scrub(val) {
+        document.getElementById('scrubber').oninput = (e) => {
             isPlaying = false;
-            document.getElementById('playBtn').innerText = "PLAY";
-            currentIndex = parseInt(val);
+            document.getElementById('playBtn').innerText = "Play";
+            currentIndex = parseInt(e.target.value);
             updateDisplay(currentIndex);
-        }
+        };
 
-        // Start
-        initRadar();
-        
-        // Auto-refresh data every 5 minutes
-        setInterval(() => {
-            log("Refreshing data...");
-            initRadar();
-        }, 300000);
-
+        // Initialize
+        loadFrames();
+        animate();
+        setInterval(loadFrames, 60000); // Check for new data every minute
     </script>
 </body>
 </html>
