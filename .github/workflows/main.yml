@@ -25,7 +25,8 @@ jobs:
        - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeccodes-dev eccodes  <-- ERROR IS HERE
+          # We use libeccodes-dev instead of 'eccodes' to avoid the package not found error
+          sudo apt-get install -y libeccodes-dev
 
       - name: Install Python Dependencies
         run: |
