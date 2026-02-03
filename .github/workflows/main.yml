@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -14,8 +16,6 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -31,22 +31,20 @@ jobs:
         run: |
           pip install numpy xarray cfgrib matplotlib requests beautifulsoup4 pillow scipy
 
-      - name: Rotate Old Data
+      - name: Rotate and Prepare Folders
         run: |
-          mkdir -p public/data/tiles_0
+          mkdir -p public/data
+          # Rotate existing files if metadata_0 exists
           if [ -f "public/data/metadata_0.json" ]; then
-            echo "Rotating history frames..."
             for i in {8..0}; do
               next=$((i+1))
-              [ -d "public/data/tiles_$i" ] && rm -rf "public/data/tiles_$next" && mv "public/data/tiles_$i" "public/data/tiles_$next" || true
               [ -f "public/data/master_$i.png" ] && mv "public/data/master_$i.png" "public/data/master_$next.png" || true
+              [ -f "public/data/metadata_$i.json" ] && mv "public/data/metadata_$i.json" "public/data/metadata_$next.json" || true
               if [ $i -eq 0 ] && [ -f "public/data/master.png" ]; then
                 mv "public/data/master.png" "public/data/master_1.png"
               fi
-              [ -f "public/data/metadata_$i.json" ] && mv "public/data/metadata_$i.json" "public/data/metadata_$next.json" || true
             done
           fi
-          mkdir -p public/data/tiles_0
 
       - name: Run Processing Script
         run: python scripts/process_mrms.py
@@ -56,5 +54,5 @@ jobs:
           git config --global user.name "weather-bot"
           git config --global user.email "bot@weather.com"
           git add public/data/*
-          git commit -m "Update radar data: $(date)" || echo "No changes to commit"
+          git commit -m "Update radar: $(date)" || echo "No changes"
           git push origin main
