@@ -61,11 +61,11 @@
             for (let i = 0; i < 10; i++) {
                 try {
                     // Path must match your repo structure exactly
-                    const path = `data/metadata_${i}.json?t=${timestamp}`;
+                    const path = `public/data/metadata_${i}.json?t=${timestamp}`;
                     const res = await fetch(path);
                     if (res.ok) {
                         const meta = await res.json();
-                        const imgUrl = (i === 0 ? 'data/master.png' : `data/master_${i}.png`) + `?t=${timestamp}`;
+                        const imgUrl = (i === 0 ? 'data/master.png' : `public/data/master_${i}.png`) + `?t=${timestamp}`;
                         tempFrames.push({ url: imgUrl, bounds: meta.bounds, time: meta.time });
                     }
                 } catch (e) { console.log("Frame missing:", i); }
