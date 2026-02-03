@@ -10,22 +10,24 @@
         #map { height: 100vh; width: 100%; }
         .controls {
             position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-            width: 90%; max-width: 400px; background: rgba(0,0,0,0.8);
+            width: 90%; max-width: 400px; background: rgba(0,0,0,0.85);
             padding: 15px; border-radius: 8px; z-index: 1000;
-            display: flex; align-items: center; gap: 10px;
+            display: flex; align-items: center; gap: 10px; border: 1px solid #444;
         }
         #status {
             position: absolute; top: 10px; left: 10px; z-index: 1000;
-            background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 4px; color: #00fb90;
+            background: rgba(0,0,0,0.8); padding: 5px 12px; border-radius: 4px; color: #00fb90;
+            font-size: 13px; font-weight: bold;
         }
+        button { background: #00fb90; border: none; padding: 5px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div id="status">Checking for data...</div>
+    <div id="status">Connecting to GitHub Data...</div>
     <div class="controls">
-        <button id="playBtn" style="padding: 5px 10px;">Pause</button>
+        <button id="playBtn">Pause</button>
         <input type="range" id="scrubber" min="0" value="0" style="flex-grow:1">
-        <div id="time-label">--:--</div>
+        <div id="time-label" style="font-family: monospace;">--:--</div>
     </div>
     <div id="map"></div>
 
@@ -39,66 +41,77 @@
         let isPlaying = true;
         let radarLayer = L.layerGroup().addTo(map);
 
-        // This matches the folder structure created by your YAML/Python
-        const DATA_PATH = "public/data/";
+        // DIRECT LINK TO YOUR REPO DATA
+        const RAW_BASE = "https://raw.githubusercontent.com/EphrataWeather/MRMS/main/public/data/";
 
         async function loadFrames() {
             const tempFrames = [];
             const ts = Date.now();
+            document.getElementById('status').innerText = "Fetching latest scans...";
 
-            // Try to load up to 10 historical frames
             for (let i = 0; i < 10; i++) {
                 try {
-                    // CRITICAL: Look for metadata_0.json, not metadata.json
-                    const response = await fetch(`${DATA_PATH}metadata_${i}.json?t=${ts}`);
-                    if (!response.ok) continue;
+                    const metaUrl = `${RAW_BASE}metadata_${i}.json?t=${ts}`;
+                    const response = await fetch(metaUrl);
                     
+                    if (!response.ok) continue;
+
                     const meta = await response.json();
-                    const imgUrl = (i === 0 ? `${DATA_PATH}master.png` : `${DATA_PATH}master_${i}.png`) + `?t=${ts}`;
+                    // Handle the naming convention: master.png for 0, master_i.png for others
+                    const imgUrl = (i === 0 ? `${RAW_BASE}master.png` : `${RAW_BASE}master_${i}.png`) + `?t=${ts}`;
                     
                     tempFrames.push({ url: imgUrl, bounds: meta.bounds, time: meta.time });
-                } catch (e) { break; }
+                } catch (e) {
+                    console.warn("Metadata not found for index", i);
+                }
             }
 
             if (tempFrames.length > 0) {
-                frames = tempFrames.reverse(); // Show oldest to newest
+                // Reverse so index 0 is the oldest and the last index is the newest (master.png)
+                frames = tempFrames.reverse(); 
                 document.getElementById('scrubber').max = frames.length - 1;
-                document.getElementById('status').innerText = `Radar Active: ${frames.length} frames`;
+                document.getElementById('status').innerText = `Radar Live (${frames.length} frames)`;
                 render(currentIndex);
             } else {
-                document.getElementById('status').innerText = "No radar data found in /public/data/";
+                document.getElementById('status').innerText = "Error: No data files found at source.";
             }
         }
 
         function render(index) {
-            // Fix for "Cannot read properties of undefined (reading 'bounds')"
-            if (!frames || !frames[index]) return;
+            if (!frames[index]) return;
             
             radarLayer.clearLayers();
             const f = frames[index];
-            L.imageOverlay(f.url, f.bounds, { opacity: 0.7 }).addTo(radarLayer);
-            document.getElementById('time-label').innerText = f.time || "";
+            
+            // Create image overlay
+            L.imageOverlay(f.url, f.bounds, { opacity: 0.75 }).addTo(radarLayer);
+            document.getElementById('time-label').innerText = f.time || "Unknown";
             document.getElementById('scrubber').value = index;
         }
 
         function loop() {
-            if (isPlaying && frames.length > 0) {
+            if (isPlaying && frames.length > 1) {
                 currentIndex = (currentIndex + 1) % frames.length;
                 render(currentIndex);
             }
             setTimeout(loop, 800);
         }
 
-        document.getElementById('playBtn').onclick = () => isPlaying = !isPlaying;
+        document.getElementById('playBtn').onclick = (e) => {
+            isPlaying = !isPlaying;
+            e.target.innerText = isPlaying ? "Pause" : "Play";
+        };
+
         document.getElementById('scrubber').oninput = (e) => {
             isPlaying = false;
+            document.getElementById('playBtn').innerText = "Play";
             currentIndex = parseInt(e.target.value);
             render(currentIndex);
         };
 
         loadFrames();
         loop();
-        setInterval(loadFrames, 60000); // Check for new files every minute
+        setInterval(loadFrames, 60000); // Sync data every minute
     </script>
 </body>
 </html>
