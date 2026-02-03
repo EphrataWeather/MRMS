@@ -45,9 +45,29 @@
         const RAW_BASE = "https://raw.githubusercontent.com/EphrataWeather/MRMS/main/public/data/";
 
         async function loadFrames() {
-            const tempFrames = [];
-            const ts = Date.now();
-            document.getElementById('status').innerText = "Fetching latest scans...";
+    const tempFrames = [];
+    const ts = Date.now(); // This creates a unique number like 1700000000123
+
+    for (let i = 0; i < 10; i++) {
+        try {
+            // Adding ?t=${ts} forces the browser to bypass the cache
+            const metaUrl = `${RAW_BASE}metadata_${i}.json?t=${ts}`;
+            const response = await fetch(metaUrl);
+            
+            if (!response.ok) continue;
+
+            const meta = await response.json();
+            
+            // Apply the same ?t=${ts} to the image URL
+            const imgUrl = (i === 0 ? `${RAW_BASE}master.png` : `${RAW_BASE}master_${i}.png`) + `?t=${ts}`;
+            
+            tempFrames.push({ url: imgUrl, bounds: meta.bounds, time: meta.time });
+        } catch (e) {
+            console.warn("Metadata not found", i);
+        }
+    }
+    // ... rest of your code
+}
 
             for (let i = 0; i < 10; i++) {
                 try {
