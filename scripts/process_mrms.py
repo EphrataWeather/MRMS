@@ -2,14 +2,14 @@ import os
 import json
 import datetime
 import requests
+import gzip
+import shutil
+import xml.etree.ElementTree as ET
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
-from bs4 import BeautifulSoup
 
 # --- CONFIGURATION ---
-# Adjust these slightly if the radar is still too far North/South
-# Decrease LAT values (e.g. 49.5, 19.5) to shift the image DOWN (South)
 LAT_TOP = 50.0
 LAT_BOT = 20.0
 LON_LEFT = -130.0
@@ -18,118 +18,137 @@ LON_RIGHT = -60.0
 OUTPUT_DIR = "public/data"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def get_file_list(base_url):
-    """Helper to fetch and parse file links from a URL."""
+# AWS S3 Bucket Information
+BUCKET_URL = "https://noaa-mrms-pds.s3.amazonaws.com"
+PREFIX_BASE = "CONUS/MergedReflectivityQCComposite_00.50"
+
+def get_s3_file_list(date_str):
+    """
+    Fetches the list of files from the S3 bucket for a specific date.
+    Returns a sorted list of file Keys (paths).
+    """
+    # AWS S3 List Objects URL
+    # We use prefix to look inside the specific folder for that date
+    request_url = f"{BUCKET_URL}/?list-type=2&prefix={PREFIX_BASE}/{date_str}/"
+    
     try:
-        print(f"Checking: {base_url}")
-        r = requests.get(base_url, timeout=10)
+        r = requests.get(request_url, timeout=15)
         if r.status_code != 200:
             return []
         
-        soup = BeautifulSoup(r.text, 'html.parser')
-        # Look for both .grib2 and .grib2.gz files
-        links = [a['href'] for a in soup.find_all('a', href=True) 
-                 if 'grib2' in a['href'] and 'latest' not in a['href']]
-        return sorted(links)
+        # Parse XML response from S3
+        root = ET.fromstring(r.content)
+        # XML namespace for S3
+        ns = {'s3': 'http://s3.amazonaws.com/doc/2006-03-01/'}
+        
+        keys = []
+        for content in root.findall('s3:Contents', ns):
+            key = content.find('s3:Key', ns).text
+            if key.endswith('.grib2.gz'):
+                keys.append(key)
+        
+        return sorted(keys)
     except Exception as e:
-        print(f"Connection error: {e}")
+        print(f"S3 Listing Error: {e}")
         return []
 
 def get_latest_mrms_url():
-    """Smart fetcher: Tries today, then falls back to yesterday."""
+    """Finds the latest file on AWS, checking Today then Yesterday."""
     now_utc = datetime.datetime.utcnow()
     
     # 1. Try TODAY
     date_str = now_utc.strftime("%Y%m%d")
-    base = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/mrms/prod/mrms"
-    product = "radar/MergedReflectivityQCComposite_00.50/"
+    print(f"Checking AWS S3 for date: {date_str}...")
+    keys = get_s3_file_list(date_str)
     
-    url_today = f"{base}.{date_str}/{product}"
-    files = get_file_list(url_today)
-    
-    if len(files) > 0:
-        return url_today + files[-1]
+    if keys:
+        return f"{BUCKET_URL}/{keys[-1]}"
 
     # 2. If today is empty, try YESTERDAY
-    print("Today's folder is empty. Checking yesterday...")
+    print("Today is empty. Checking yesterday...")
     yesterday = (now_utc - datetime.timedelta(days=1)).strftime("%Y%m%d")
-    url_yesterday = f"{base}.{yesterday}/{product}"
-    files = get_file_list(url_yesterday)
+    keys = get_s3_file_list(yesterday)
     
-    if len(files) > 0:
-        return url_yesterday + files[-1]
+    if keys:
+        return f"{BUCKET_URL}/{keys[-1]}"
 
     return None
 
 def process_data():
-    # 1. Get the URL
+    # 1. Get URL from AWS
     url = get_latest_mrms_url()
     if not url:
-        print("CRITICAL ERROR: No radar data found for today or yesterday.")
+        print("CRITICAL: No data found on AWS.")
         return
 
     print(f"Downloading: {url}")
     
-    # 2. Download
+    # 2. Download & Decompress (.gz -> .grib2)
     try:
         r = requests.get(url, stream=True)
-        with open("temp.grib2", "wb") as f:
+        # Save compressed file
+        with open("temp.grib2.gz", "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
+        
+        # Decompress it
+        print("Decompressing GRIB2 file...")
+        with gzip.open("temp.grib2.gz", "rb") as f_in:
+            with open("temp.grib2", "wb") as f_out:
+                shutil.copyfileobj(f_in, f_out)
+                
     except Exception as e:
-        print(f"Download failed: {e}")
+        print(f"Download/Decompression failed: {e}")
         return
 
-    # 3. Open Data
+    # 3. Open Data with xarray
     try:
-        # filter_by_keys prevents errors with multi-message grib files
+        # filter_by_keys is crucial for these complex MRMS files
         ds = xr.open_dataset("temp.grib2", engine="cfgrib", 
                              backend_kwargs={'filter_by_keys': {'stepType': 'instant', 'typeOfLevel': 'heightAboveSea'}})
     except Exception:
-        # Fallback for different GRIB structures
+        # Fallback
         try:
             ds = xr.open_dataset("temp.grib2", engine="cfgrib")
         except Exception as e:
             print(f"GRIB Read Error: {e}")
             return
 
-    # 4. Process Coordinates (0-360 to -180/180)
+    # 4. Fix Coordinates (0-360 -> -180-180)
     if 'longitude' in ds.coords:
         ds = ds.assign_coords(longitude=(((ds.longitude + 180) % 360) - 180))
         ds = ds.sortby('longitude')
     
-    # Select the correct variable (Reflectivity)
-    # Usually 'unknown', 'paramId_0', or similar. We look for the data variable.
+    # Get the data variable (Reflectivity)
     var_name = list(ds.data_vars)[0]
     data = ds[var_name]
 
-    # 5. Crop to US Bounds
+    # 5. Crop to Region
     subset = data.sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
     
-    # Filter noise
+    # Filter noise (< 5 dBZ)
     radar_clean = subset.where(subset > 5)
 
     # 6. Plot High-Res Image
-    # figsize=(40,20) ensures very high quality (4000x2000 pixels approx)
+    # Using 'equal' aspect ratio to fix the North/South stretching
     fig = plt.figure(figsize=(40, 20), frameon=False)
     ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
     
     ax.imshow(radar_clean, 
               extent=[LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP],
-              aspect='equal',  # THIS FIXES THE NORTH/SOUTH SQUASHING
+              aspect='equal', 
               cmap='nipy_spectral', 
               vmin=0, vmax=75,
-              interpolation='nearest') # 'nearest' keeps pixels sharp
+              interpolation='nearest') 
     
     plt.axis('off')
     
-    # Save
+    # Save Image
     out_path = os.path.join(OUTPUT_DIR, "master.png")
     plt.savefig(out_path, transparent=True, dpi=100, pad_inches=0)
     plt.close()
 
     # 7. Metadata
-    # Get accurate timestamp from the file
     valid_time = ds.time.values
     ts = datetime.datetime.utcfromtimestamp(valid_time.astype(int) * 1e-9)
     time_str = ts.strftime("%b %d, %H:%M UTC")
@@ -142,7 +161,7 @@ def process_data():
     with open(os.path.join(OUTPUT_DIR, "metadata_0.json"), "w") as f:
         json.dump(meta, f)
 
-    print(f"Success. Image saved for {time_str}")
+    print(f"Success. AWS Data processed for {time_str}")
 
 if __name__ == "__main__":
     process_data()
