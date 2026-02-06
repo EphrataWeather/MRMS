@@ -18,32 +18,48 @@ NUM_FRAMES = 6
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 BUCKET_URL = "https://noaa-mrms-pds.s3.amazonaws.com"
+# Note: In 2026, some products moved to include version subfolders
 RATE_PREFIX = "CONUS/SurfacePrecipRate"
 FLAG_PREFIX = "CONUS/PrecipFlag"
 
 def get_s3_keys(date_str, prefix):
-    request_url = f"{BUCKET_URL}/?list-type=2&prefix={prefix}/{date_str}/"
-    try:
-        r = requests.get(request_url, timeout=15)
-        if r.status_code != 200: return []
-        root = ET.fromstring(r.content)
-        ns = {'s3': 'http://s3.amazonaws.com/doc/2006-03-01/'}
-        return sorted([c.find('s3:Key', ns).text for c in root.findall('s3:Contents', ns) 
-                       if c.find('s3:Key', ns).text.endswith('.grib2.gz')])
-    except: return []
+    """Fetches and parses S3 XML response using a robust namespace-free method."""
+    # We try both the base prefix and the common '00.00' subfolder
+    search_prefixes = [f"{prefix}/{date_str}/", f"{prefix}/00.00/{date_str}/"]
+    
+    all_keys = []
+    for p in search_prefixes:
+        request_url = f"{BUCKET_URL}/?list-type=2&prefix={p}"
+        try:
+            r = requests.get(request_url, timeout=15)
+            if r.status_code != 200:
+                continue
+            
+            # Robust XML parsing (ignores namespaces)
+            root = ET.fromstring(r.content)
+            for content in root.findall('.//{http://s3.amazonaws.com/doc/2006-03-01/}Contents'):
+                key = content.find('{http://s3.amazonaws.com/doc/2006-03-01/}Key').text
+                if key.endswith('.grib2.gz'):
+                    all_keys.append(key)
+        except Exception as e:
+            print(f"Error searching {p}: {e}")
+            
+    return sorted(all_keys)
 
 def download_and_extract(key, filename):
-    r = requests.get(f"{BUCKET_URL}/{key}", stream=True)
+    url = f"{BUCKET_URL}/{key}"
+    r = requests.get(url, stream=True)
+    if r.status_code != 200:
+        raise Exception(f"Failed to download {url}")
+        
     with open(filename + ".gz", "wb") as f:
-        for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
+            
     with gzip.open(filename + ".gz", "rb") as f_in, open(filename, "wb") as f_out:
         shutil.copyfileobj(f_in, f_out)
 
 def get_colormap(p_type):
-    """
-    Custom colormaps for different precip categories.
-    PrecipFlag Values: 1,2,5,7,8 (Rain) | 3,7 (Snow) | 4,6,10 (Ice/Mix)
-    """
     if p_type == 'snow':
         return ListedColormap(['#afc6ff', '#89a9ff', '#5a82ff', '#2d58ff', '#0026ff'])
     elif p_type == 'ice':
@@ -52,19 +68,29 @@ def get_colormap(p_type):
         return ListedColormap(['#00fb90', '#00bb00', '#ffff00', '#ff9100', '#ff0000', '#d20000'])
 
 def process_frame(index, rate_key):
-    # Match the PrecipFlag file to the SurfacePrecipRate timestamp
-    flag_key = rate_key.replace(RATE_PREFIX, FLAG_PREFIX).replace("SurfacePrecipRate", "PrecipFlag")
+    # Derive the matching PrecipFlag key
+    # This logic matches the timestamp string at the end of the filename
+    timestamp_part = rate_key.split('_')[-1] # e.g., 20260205-010000.grib2.gz
     
-    print(f"Processing Frame {index}: {rate_key.split('/')[-1]}")
+    # We search the flag directory for a matching timestamp
+    date_folder = rate_key.split('/')[-2]
+    flag_keys = get_s3_keys(date_folder, FLAG_PREFIX)
+    flag_key = next((k for k in flag_keys if timestamp_part in k), None)
+    
+    if not flag_key:
+        print(f"Skipping frame {index}: No matching PrecipFlag found for {rate_key}")
+        return
+
+    print(f"Processing Frame {index}: Rate[{rate_key.split('/')[-1]}] Flag[{flag_key.split('/')[-1]}]")
+    
     try:
         download_and_extract(rate_key, "rate.grib2")
         download_and_extract(flag_key, "flag.grib2")
         
-        # Open datasets
         ds_rate = xr.open_dataset("rate.grib2", engine="cfgrib")
         ds_flag = xr.open_dataset("flag.grib2", engine="cfgrib")
         
-        # Normalize Longitude
+        # Normalize Longitude (0-360 to -180-180)
         for ds in [ds_rate, ds_flag]:
             ds.coords['longitude'] = ((ds.longitude + 180) % 360) - 180
             
@@ -74,20 +100,17 @@ def process_frame(index, rate_key):
         fig = plt.figure(figsize=(20, 10), frameon=False)
         ax = fig.add_axes([0, 0, 1, 1], frameon=False, xticks=[], yticks=[])
         
-        # Define precip masks based on NOAA Flag values
-        # Rain: 1 (Warm), 2 (Strat), 5 (Conv), 7 (Trop-Conv), 8 (Trop-Strat)
+        # PrecipFlag Values: 1-2, 5, 7-8 (Rain) | 3 (Snow) | 4,6,10 (Ice/Mix)
         rain_mask = rate.where((flag == 1) | (flag == 2) | (flag == 5) | (flag == 7) | (flag == 8))
-        # Snow: 3 (Snow)
         snow_mask = rate.where(flag == 3)
-        # Ice/Mixed: 4 (Ice Pellets), 6 (Freezing Rain), 10 (Mixed)
         ice_mask = rate.where((flag == 4) | (flag == 6) | (flag == 10))
 
-        # Plot each layer (Vmax=50mm/hr for rain, lower for snow/ice usually looks better)
-        common_params = {'extent': [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP], 'aspect': 'equal', 'interpolation': 'nearest'}
+        params = {'extent': [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP], 'aspect': 'equal', 'interpolation': 'nearest'}
         
-        ax.imshow(rain_mask.where(rain_mask > 0.1), cmap=get_colormap('rain'), vmin=0.1, vmax=50, **common_params)
-        ax.imshow(snow_mask.where(snow_mask > 0.1), cmap=get_colormap('snow'), vmin=0.1, vmax=10, **common_params)
-        ax.imshow(ice_mask.where(ice_mask > 0.1), cmap=get_colormap('ice'), vmin=0.1, vmax=10, **common_params)
+        # We plot rain first, then snow/ice on top
+        ax.imshow(rain_mask.where(rain_mask > 0.1), cmap=get_colormap('rain'), vmin=0.1, vmax=50, **params)
+        ax.imshow(snow_mask.where(snow_mask > 0.1), cmap=get_colormap('snow'), vmin=0.1, vmax=10, **params)
+        ax.imshow(ice_mask.where(ice_mask > 0.1), cmap=get_colormap('ice'), vmin=0.1, vmax=10, **params)
 
         plt.axis('off')
         fname = "master.png" if index == 0 else f"master_{index}.png"
@@ -100,21 +123,24 @@ def process_frame(index, rate_key):
             with open(os.path.join(OUTPUT_DIR, "metadata_0.json"), "w") as f: json.dump(meta, f)
 
     except Exception as e:
-        print(f"Error frame {index}: {e}")
+        print(f"Processing failed for frame {index}: {e}")
 
 if __name__ == "__main__":
     now = datetime.datetime.utcnow()
-    # Check today, then yesterday if today's folder is empty
-    for d in [0, 1]:
-        date_str = (now - datetime.timedelta(days=d)).strftime("%Y%m%d")
-        keys = get_s3_keys(date_str, RATE_PREFIX)
-        if keys: break
+    keys = []
+    
+    # Check last 3 days
+    for i in range(3):
+        d_str = (now - datetime.timedelta(days=i)).strftime("%Y%m%d")
+        print(f"Searching AWS for {d_str}...")
+        keys = get_s3_keys(d_str, RATE_PREFIX)
+        if keys:
+            print(f"Found {len(keys)} files for {d_str}")
+            break
 
     if keys:
-        # Get the latest N files for animation
         latest_keys = keys[-NUM_FRAMES:][::-1]
         for i, key in enumerate(latest_keys):
             process_frame(i, key)
     else:
-        print("No data found in the last 48 hours.")
-        
+        print("CRITICAL: No MRMS Rate data found on S3. Check if BUCKET_URL or prefixes have changed.")
