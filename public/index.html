@@ -1,137 +1,101 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
+    <title>Professional MRMS Radar</title>
+    <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live MRMS Radar</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; background: #080808; font-family: sans-serif; color: white; }
-        #map { height: 100vh; width: 100%; }
-        .controls {
-            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-            width: 90%; max-width: 400px; background: rgba(0,0,0,0.85);
-            padding: 15px; border-radius: 8px; z-index: 1000;
-            display: flex; align-items: center; gap: 10px; border: 1px solid #444;
+        body { margin: 0; padding: 0; background: #1a1a1a; color: white; font-family: sans-serif; }
+        #map { height: 100vh; width: 100vw; background: #0b1116; }
+        .ui-panel {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            z-index: 1000; background: rgba(0,0,0,0.8); padding: 15px 25px;
+            border-radius: 50px; border: 1px solid #444; display: flex; align-items: center; gap: 20px;
         }
-        #status {
-            position: absolute; top: 10px; left: 10px; z-index: 1000;
-            background: rgba(0,0,0,0.8); padding: 5px 12px; border-radius: 4px; color: #00fb90;
-            font-size: 13px; font-weight: bold;
+        #timestamp { font-weight: bold; min-width: 150px; text-align: center; color: #00e6ff; }
+        .legend {
+            position: absolute; top: 20px; right: 20px; z-index: 1000;
+            background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; font-size: 12px;
         }
-        button { background: #00fb90; border: none; padding: 5px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 5px; }
+        .color-box { width: 15px; height: 15px; margin-right: 8px; border-radius: 2px; }
     </style>
 </head>
 <body>
-    <div id="status">Connecting to GitHub Data...</div>
-    <div class="controls">
-        <button id="playBtn">Pause</button>
-        <input type="range" id="scrubber" min="0" value="0" style="flex-grow:1">
-        <div id="time-label" style="font-family: monospace;">--:--</div>
-    </div>
-    <div id="map"></div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script>
-        const map = L.map('map', { zoomControl: false }).setView([38.5, -96.5], 4);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+<div id="map"></div>
 
-        let frames = [];
-        let currentIndex = 0;
-        let isPlaying = true;
-        let radarLayer = L.layerGroup().addTo(map);
+<div class="ui-panel">
+    <div id="timestamp">Loading Radar...</div>
+</div>
 
-        // DIRECT LINK TO YOUR REPO DATA
-        const RAW_BASE = "https://raw.githubusercontent.com/EphrataWeather/MRMS/main/public/data/";
+<div class="legend">
+    <div class="legend-item"><div class="color-box" style="background: #00bb00"></div> Rain</div>
+    <div class="legend-item"><div class="color-box" style="background: #00ffff"></div> Snow</div>
+    <div class="legend-item"><div class="color-box" style="background: #ff00ff"></div> Ice/Mix</div>
+</div>
 
-        async function loadFrames() {
-    const tempFrames = [];
-    const ts = Date.now(); // This creates a unique number like 1700000000123
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const map = L.map('map', {
+        center: [38, -97],
+        zoom: 5,
+        zoomControl: false
+    });
 
-    for (let i = 0; i < 10; i++) {
+    // Dark professional base map
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    let frames = [];
+    let currentFrameIndex = 0;
+    let imageOverlay = null;
+
+    async function initRadar() {
         try {
-            // Adding ?t=${ts} forces the browser to bypass the cache
-            const metaUrl = `${RAW_BASE}metadata_${i}.json?t=${ts}`;
-            const response = await fetch(metaUrl);
-            
-            if (!response.ok) continue;
-
+            // 1. Fetch metadata to get the geographical bounds
+            const response = await fetch('data/metadata_0.json');
             const meta = await response.json();
+            const bounds = meta.bounds; // [[latBot, lonLeft], [latTop, lonRight]]
             
-            // Apply the same ?t=${ts} to the image URL
-            const imgUrl = (i === 0 ? `${RAW_BASE}master.png` : `${RAW_BASE}master_${i}.png`) + `?t=${ts}`;
-            
-            tempFrames.push({ url: imgUrl, bounds: meta.bounds, time: meta.time });
+            document.getElementById('timestamp').innerText = meta.time;
+
+            // 2. Setup Frame list (0 to 9)
+            // master.png is latest, master_1.png is older, etc.
+            // We reverse them so the animation plays forward in time
+            const frameNames = ['master.png', 'master_1.png', 'master_2.png', 'master_3.png', 'master_4.png', 'master_5.png'];
+            frames = frameNames.reverse().map(name => `data/${name}`);
+
+            // 3. Create the overlay
+            imageOverlay = L.imageOverlay(frames[0], bounds, {
+                opacity: 0.8,
+                interactive: false
+            }).addTo(map);
+
+            // 4. Start Animation Loop
+            setInterval(() => {
+                currentFrameIndex = (currentFrameIndex + 1) % frames.length;
+                imageOverlay.setUrl(frames[currentFrameIndex]);
+                
+                // If it's the latest frame, show the real time, otherwise show "Looping"
+                if (currentFrameIndex === frames.length - 1) {
+                    document.getElementById('timestamp').style.color = "#00e6ff";
+                    document.getElementById('timestamp').innerText = meta.time;
+                } else {
+                    document.getElementById('timestamp').style.color = "#aaa";
+                    document.getElementById('timestamp').innerText = "Past 60 mins...";
+                }
+            }, 600); // 600ms per frame
+
         } catch (e) {
-            console.warn("Metadata not found", i);
+            console.error("Error loading radar data:", e);
+            document.getElementById('timestamp').innerText = "Radar Offline";
         }
     }
-    // ... rest of your code
-}
 
-            for (let i = 0; i < 10; i++) {
-                try {
-                    const metaUrl = `${RAW_BASE}metadata_${i}.json?t=${ts}`;
-                    const response = await fetch(metaUrl);
-                    
-                    if (!response.ok) continue;
-
-                    const meta = await response.json();
-                    // Handle the naming convention: master.png for 0, master_i.png for others
-                    const imgUrl = (i === 0 ? `${RAW_BASE}master.png` : `${RAW_BASE}master_${i}.png`) + `?t=${ts}`;
-                    
-                    tempFrames.push({ url: imgUrl, bounds: meta.bounds, time: meta.time });
-                } catch (e) {
-                    console.warn("Metadata not found for index", i);
-                }
-            }
-
-            if (tempFrames.length > 0) {
-                // Reverse so index 0 is the oldest and the last index is the newest (master.png)
-                frames = tempFrames.reverse(); 
-                document.getElementById('scrubber').max = frames.length - 1;
-                document.getElementById('status').innerText = `Radar Live (${frames.length} frames)`;
-                render(currentIndex);
-            } else {
-                document.getElementById('status').innerText = "Error: No data files found at source.";
-            }
-        }
-
-        function render(index) {
-            if (!frames[index]) return;
-            
-            radarLayer.clearLayers();
-            const f = frames[index];
-            
-            // Create image overlay
-            L.imageOverlay(f.url, f.bounds, { opacity: 0.75 }).addTo(radarLayer);
-            document.getElementById('time-label').innerText = f.time || "Unknown";
-            document.getElementById('scrubber').value = index;
-        }
-
-        function loop() {
-            if (isPlaying && frames.length > 1) {
-                currentIndex = (currentIndex + 1) % frames.length;
-                render(currentIndex);
-            }
-            setTimeout(loop, 800);
-        }
-
-        document.getElementById('playBtn').onclick = (e) => {
-            isPlaying = !isPlaying;
-            e.target.innerText = isPlaying ? "Pause" : "Play";
-        };
-
-        document.getElementById('scrubber').oninput = (e) => {
-            isPlaying = false;
-            document.getElementById('playBtn').innerText = "Play";
-            currentIndex = parseInt(e.target.value);
-            render(currentIndex);
-        };
-
-        loadFrames();
-        loop();
-        setInterval(loadFrames, 60000); // Sync data every minute
-    </script>
+    initRadar();
+</script>
 </body>
 </html>
