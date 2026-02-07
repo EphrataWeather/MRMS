@@ -1,218 +1,188 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>NexGen Radar Viewer</title>
+    <title>Precision Weather Radar</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; padding: 0; background: #050a14; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+        body { margin: 0; background: #050a14; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
         #map { height: 100vh; width: 100vw; background: #050a14; }
+        .leaflet-image-layer { image-rendering: pixelated; }
 
-        /* Crisp Radar Rendering */
-        .leaflet-image-layer {
-            image-rendering: pixelated; 
-            image-rendering: crisp-edges;
-        }
-
-        /* LIQUID GLASS UI CONTAINER */
+        /* --- GLASS UI --- */
         .glass-panel {
             position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
-            z-index: 1000;
-            
-            /* Navy Blue Glass Effect */
-            background: rgba(10, 25, 41, 0.75);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6);
-            
-            padding: 15px 25px;
-            border-radius: 20px;
-            display: flex; flex-direction: column; gap: 10px;
-            min-width: 320px; color: white;
+            z-index: 1000; background: rgba(10, 25, 41, 0.85); backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1); padding: 15px 25px; border-radius: 20px;
+            display: flex; flex-direction: column; gap: 10px; min-width: 350px; color: white;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
 
-        .controls-row { display: flex; align-items: center; justify-content: space-between; gap: 15px; }
-
-        /* Play Button */
-        .play-btn {
-            background: linear-gradient(135deg, #00c6ff, #0072ff);
-            border: none; width: 45px; height: 45px; border-radius: 50%;
-            cursor: pointer; color: white; font-size: 20px;
-            display: flex; align-items: center; justify-content: center;
-            box-shadow: 0 4px 15px rgba(0, 114, 255, 0.4);
-            transition: transform 0.2s;
-        }
-        .play-btn:active { transform: scale(0.95); }
-
-        /* Sliders */
-        input[type=range] {
-            -webkit-appearance: none; width: 100%; background: transparent;
-        }
-        input[type=range]::-webkit-slider-runnable-track {
-            width: 100%; height: 6px; background: rgba(255,255,255,0.2); border-radius: 3px;
-        }
-        input[type=range]::-webkit-slider-thumb {
-            -webkit-appearance: none; height: 18px; width: 18px; border-radius: 50%;
-            background: #00c6ff; margin-top: -6px; box-shadow: 0 0 10px rgba(0,198,255,0.5);
-            cursor: pointer;
-        }
-
-        /* Labels */
-        .time-label { font-size: 24px; font-weight: 600; letter-spacing: 0.5px; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
-        .sub-label { font-size: 11px; color: #a0aec0; text-transform: uppercase; letter-spacing: 1px; }
-
-        /* Legend */
-        .legend-glass {
+        /* --- DETAILED LEGEND --- */
+        .legend-container {
             position: absolute; top: 20px; right: 20px; z-index: 1000;
-            background: rgba(10, 25, 41, 0.75); backdrop-filter: blur(10px);
+            background: rgba(10, 25, 41, 0.9); backdrop-filter: blur(8px);
             padding: 15px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);
+            color: white; font-size: 11px; width: 140px;
         }
-        .legend-item { display: flex; align-items: center; font-size: 12px; margin-bottom: 5px; color: #e2e8f0; }
-        .color-dot { width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; }
+        .legend-title { font-weight: bold; margin-bottom: 8px; text-transform: uppercase; color: #a0aec0; letter-spacing: 1px; }
+        
+        .scale-row { display: flex; height: 12px; margin-bottom: 4px; border-radius: 2px; overflow: hidden; }
+        .scale-item { flex: 1; height: 100%; }
+        
+        .scale-labels { display: flex; justify-content: space-between; margin-bottom: 12px; color: #ccc; font-size: 9px; }
 
+        /* COLORS (Must match Python) */
+        /* RAIN: Light Green -> Dark Green -> Yellow -> Orange -> Red -> Maroon */
+        .rain-1 { background: #00fb90; } .rain-2 { background: #00bb00; }
+        .rain-3 { background: #008800; } .rain-4 { background: #ffff00; }
+        .rain-5 { background: #ff9100; } .rain-6 { background: #ff0000; }
+        .rain-7 { background: #d20000; } .rain-8 { background: #910000; }
+
+        /* SNOW: Cyan -> White -> Blue */
+        .snow-1 { background: #00ffff; } .snow-2 { background: #ffffff; } .snow-3 { background: #5a82ff; }
+
+        /* ICE: Pink -> Purple */
+        .ice-1 { background: #ff00ff; } .ice-2 { background: #910091; }
+
+        /* --- CONTROLS --- */
+        .time-display { font-size: 20px; font-weight: 700; text-align: center; color: #00c6ff; text-shadow: 0 0 10px rgba(0,198,255,0.3); }
+        .controls-row { display: flex; align-items: center; gap: 15px; margin-top: 5px; }
+        
+        button { background: #00c6ff; border: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
+        button:hover { background: #fff; transform: scale(1.1); }
+        
+        input[type=range] { flex-grow: 1; accent-color: #00c6ff; cursor: pointer; }
     </style>
 </head>
 <body>
 
 <div id="map"></div>
 
-<div class="legend-glass">
-    <div class="legend-item"><div class="color-dot" style="background: #00ff00"></div> Rain</div>
-    <div class="legend-item"><div class="color-dot" style="background: #00ffff"></div> Snow</div>
-    <div class="legend-item"><div class="color-dot" style="background: #ff00ff"></div> Ice</div>
+<div class="legend-container">
+    <div class="legend-title">Rain Intensity</div>
+    <div class="scale-row">
+        <div class="scale-item rain-1"></div><div class="scale-item rain-2"></div>
+        <div class="scale-item rain-3"></div><div class="scale-item rain-4"></div>
+        <div class="scale-item rain-5"></div><div class="scale-item rain-6"></div>
+        <div class="scale-item rain-7"></div><div class="scale-item rain-8"></div>
+    </div>
+    <div class="scale-labels"><span>Light</span><span>Heavy</span><span>Extreme</span></div>
+
+    <div class="legend-title">Snow</div>
+    <div class="scale-row">
+        <div class="scale-item snow-1"></div><div class="scale-item snow-2"></div><div class="scale-item snow-3"></div>
+    </div>
+
+    <div class="legend-title" style="margin-top:8px;">Ice / Mix</div>
+    <div class="scale-row">
+        <div class="scale-item ice-1"></div><div class="scale-item ice-2"></div>
+    </div>
 </div>
 
 <div class="glass-panel">
-    <div style="text-align: center; margin-bottom: 5px;">
-        <div id="time-display" class="time-label">Loading...</div>
-        <div id="date-display" class="sub-label">WAITING FOR DATA</div>
-    </div>
-
+    <div id="clock" class="time-display">Loading Data...</div>
     <div class="controls-row">
-        <button id="play-btn" class="play-btn">▶</button>
-        <div style="flex-grow: 1;">
-            <input type="range" id="timeline" min="0" max="9" step="1" value="0">
-        </div>
-    </div>
-
-    <div class="controls-row" style="margin-top: 5px;">
-        <span class="sub-label">Opacity</span>
-        <input type="range" id="opacity-slider" min="0" max="1" step="0.1" value="0.8">
+        <button id="play-btn">⏸</button>
+        <input type="range" id="scrubber" min="0" max="9" value="0">
     </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    // 1. Initialize Map with a Dark Base
-    const map = L.map('map', { 
-        center: [38, -95], 
-        zoom: 5, 
-        zoomControl: false,
-        attributionControl: false
-    });
+    // 1. MAP SETUP
+    const map = L.map('map', { center: [38, -95], zoom: 5, zoomControl: false });
+    
+    // Dark Base
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
 
-    // 2. Base Layer (Dark Matter) - Bottommost
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
-        pane: 'tilePane'
-    }).addTo(map);
+    // Radar Pane (Below labels)
+    map.createPane('radar');
+    map.getPane('radar').style.zIndex = 200;
+    map.getPane('radar').style.pointerEvents = 'none';
 
-    // 3. Create a Custom Pane for Radar (So it sits BELOW labels)
-    map.createPane('radarPane');
-    map.getPane('radarPane').style.zIndex = 200; // Between tiles (0) and shadows (400)
-    map.getPane('radarPane').style.pointerEvents = 'none'; // Click through radar
+    // Labels (Above radar)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'popupPane', zIndex: 600 }).addTo(map);
 
-    // 4. Labels Layer (Towns/Borders) - Topmost
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-        pane: 'markerPane', // Ensures labels are on top of radar
-        zIndex: 600
-    }).addTo(map);
-
-    let frames = [];
-    let currentIdx = 0;
-    let isPlaying = false;
+    // 2. STATE
+    const TOTAL_FRAMES = 10;
+    let frames = [];     // Stores image paths: [master.png, master_1.png...]
+    let metaData = [];   // Stores time info: ["10:00 PM", "9:50 PM"...]
+    let currentIdx = 0;  // 0 = Oldest, 9 = Newest (Reverse logic for smoother loop)
     let overlay = null;
     let timer = null;
-    let metadata = null;
-    const NUM_FRAMES = 10;
+    let isPlaying = true;
 
     async function init() {
         try {
-            const res = await fetch('data/metadata_0.json');
-            metadata = await res.json();
+            // Load Metadata for ALL frames to get their specific times
+            // We iterate 0 to 9, where 0 is newest. 
+            // BUT for the animation loop, we want 0 to be Oldest.
+            // So we will fetch them, then REVERSE the arrays.
             
-            // Generate file paths (master_9.png is oldest, master.png is newest)
-            frames = [];
-            for(let i=NUM_FRAMES-1; i>=1; i--) frames.push(`data/master_${i}.png`);
-            frames.push(`data/master.png`);
+            const rawFrames = [];
+            const rawMeta = [];
 
-            // Add Initial Radar Overlay to custom pane
-            overlay = L.imageOverlay(frames[0], metadata.bounds, { 
-                pane: 'radarPane',
-                opacity: 0.8 
-            }).addTo(map);
+            for (let i = 0; i < TOTAL_FRAMES; i++) {
+                const fName = i === 0 ? "master.png" : `master_${i}.png`;
+                const mName = `metadata_${i}.json`; // Using new per-frame metadata
+                
+                rawFrames.push(`data/${fName}`);
+                
+                // Fetch the JSON for this specific frame
+                const res = await fetch(`data/${mName}`);
+                const data = await res.json();
+                rawMeta.push(data);
+            }
 
-            // Update UI
-            updateFrame(0);
+            // Reverse so Index 0 is the OLDEST time (start of loop)
+            frames = rawFrames.reverse();
+            metaData = rawMeta.reverse();
+
+            // Initialize Overlay with the oldest frame (Index 0)
+            overlay = L.imageOverlay(frames[0], metaData[0].bounds, { pane: 'radar', opacity: 0.8 }).addTo(map);
             
-            // Auto-start
-            togglePlay();
+            updateDisplay(0);
+            startLoop();
 
         } catch (e) {
             console.error(e);
-            document.getElementById('time-display').innerText = "OFFLINE";
+            document.getElementById('clock').innerText = "RADAR OFFLINE";
+            document.getElementById('clock').style.color = "red";
         }
     }
 
-    function updateFrame(index) {
+    function updateDisplay(index) {
         currentIdx = index;
-        overlay.setUrl(frames[index]);
-        document.getElementById('timeline').value = index;
-
-        // Calculate Time Display
-        // Each frame is roughly 10-15 mins apart, but we base it on the newest frame time
-        if (index === NUM_FRAMES - 1) {
-            // Latest Frame
-            document.getElementById('time-display').innerText = metadata.time;
-            document.getElementById('date-display').innerText = "LIVE RADAR";
-            document.getElementById('time-display').style.color = "#00c6ff";
-        } else {
-            // Past Frames
-            const diff = (NUM_FRAMES - 1 - index) * 10; // Approx 10 mins per frame
-            document.getElementById('time-display').innerText = `-${diff} MINS`;
-            document.getElementById('date-display').innerText = "PAST LOOP";
-            document.getElementById('time-display').style.color = "#ffffff";
-        }
+        overlay.setUrl(frames[index]); // Leaflet handles the image swap
+        document.getElementById('scrubber').value = index;
+        document.getElementById('clock').innerText = metaData[index].time;
     }
 
-    function togglePlay() {
-        isPlaying = !isPlaying;
-        const btn = document.getElementById('play-btn');
-        
-        if (isPlaying) {
-            btn.innerText = "⏸";
-            timer = setInterval(() => {
-                let nextIdx = (currentIdx + 1) % NUM_FRAMES;
-                updateFrame(nextIdx);
-            }, 600);
-        } else {
-            btn.innerText = "▶";
-            clearInterval(timer);
-        }
+    function startLoop() {
+        isPlaying = true;
+        document.getElementById('play-btn').innerText = "⏸";
+        timer = setInterval(() => {
+            let next = (currentIdx + 1) % TOTAL_FRAMES;
+            updateDisplay(next);
+        }, 600);
     }
 
-    // --- Event Listeners ---
-    document.getElementById('play-btn').addEventListener('click', togglePlay);
+    function pauseLoop() {
+        isPlaying = false;
+        document.getElementById('play-btn').innerText = "▶";
+        clearInterval(timer);
+    }
 
-    document.getElementById('timeline').addEventListener('input', (e) => {
-        if(isPlaying) togglePlay(); // Pause if user drags
-        updateFrame(parseInt(e.target.value));
-    });
+    // Toggle Play/Pause
+    document.getElementById('play-btn').onclick = () => isPlaying ? pauseLoop() : startLoop();
 
-    document.getElementById('opacity-slider').addEventListener('input', (e) => {
-        if(overlay) overlay.setOpacity(e.target.value);
-    });
+    // Scrubber Interaction
+    document.getElementById('scrubber').oninput = (e) => {
+        pauseLoop();
+        updateDisplay(parseInt(e.target.value));
+    };
 
     init();
 </script>
