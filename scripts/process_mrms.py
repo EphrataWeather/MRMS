@@ -12,9 +12,9 @@ from datetime import datetime, timezone, timedelta
 import pytz
 
 # --- CONFIGURATION ---
-# Fixed bounds to ensure consistency across all frames
-LAT_TOP, LAT_BOT = 51.0, 21.0
-LON_LEFT, LON_RIGHT = -128.0, -65.0
+# Using precise 0.01 degree intervals ensures the MRMS grid aligns perfectly.
+LAT_TOP, LAT_BOT = 50.0, 20.0
+LON_LEFT, LON_RIGHT = -130.0, -60.0
 OUTPUT_DIR = "public/data"
 NUM_FRAMES = 10
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -58,7 +58,7 @@ def get_colormap(p_type):
         return ListedColormap(['#00ffff', '#80ffff', '#ffffff', '#adc5ff', '#5a82ff'])
     elif p_type == 'ice':
         return ListedColormap(['#ff00ff', '#d100d1', '#910091', '#4b0082'])
-    else: # Rain colors
+    else: # Rain (Standard NWS-ish Scale)
         return ListedColormap(['#00fb90', '#00bb00', '#008800', '#ffff00', '#ff9100', '#ff0000', '#d20000', '#910000'])
 
 def process_frame(index, rate_key, flag_keys):
@@ -71,61 +71,68 @@ def process_frame(index, rate_key, flag_keys):
         download_and_extract(rate_key, "rate.grib2")
         download_and_extract(flag_key, "flag.grib2")
         
+        # Open with explicit settings
         ds_rate = xr.open_dataset("rate.grib2", engine="cfgrib")
         ds_flag = xr.open_dataset("flag.grib2", engine="cfgrib")
         
-        # Correct longitude and sort coordinates to ensure North is Up and West is Left
+        # 1. Normalize Longitude and SORT coordinates
+        # This ensures the array indexing [0,0] is definitely the top-left (North-West)
         for ds in [ds_rate, ds_flag]:
             ds.coords['longitude'] = ((ds.longitude + 180) % 360) - 180
         
-        # Slice the data
+        ds_rate = ds_rate.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
+        ds_flag = ds_flag.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
+
+        # 2. Slice to exact bounds
         rate = ds_rate[list(ds_rate.data_vars)[0]].sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
         flag = ds_flag[list(ds_flag.data_vars)[0]].sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
 
-        # IMPORTANT: Fix alignment by using fixed bounds for the extent
-        extent = [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP]
+        # 3. Create Masks
+        rain = rate.where(flag.isin([1, 2, 5, 7, 8]))
+        snow = rate.where(flag == 3)
+        ice  = rate.where(flag.isin([4, 6, 10]))
 
-        # Classification
-        rain_mask = rate.where(flag.isin([1, 2, 5, 7, 8]))
-        snow_mask = rate.where(flag == 3)
-        ice_mask = rate.where(flag.isin([4, 6, 10]))
-
-        # --- PLOTTING FIX ---
-        # We use a fixed figure size and remove 'bbox_inches=tight' to prevent the North/West shift
-        height, width = rain_mask.shape
-        fig = plt.figure(figsize=(width/100, height/100), dpi=100)
+        # --- PIXEL-PERFECT PLOTTING ---
+        # Calculate aspect ratio to avoid internal Matplotlib stretching
+        height_px, width_px = rain.shape
+        fig = plt.figure(figsize=(width_px/100, height_px/100), dpi=100)
         ax = fig.add_axes([0, 0, 1, 1], frameon=False)
         ax.set_axis_off()
 
-        # Render layers with vmax=15 for Rain
-        if np.nanmax(rain_mask.values) > 0.1:
-            ax.imshow(rain_mask, cmap=get_colormap('rain'), vmin=0.1, vmax=15, extent=extent, origin='upper', interpolation='nearest')
-        if np.nanmax(snow_mask.values) > 0.1:
-            ax.imshow(snow_mask, cmap=get_colormap('snow'), vmin=0.1, vmax=5, extent=extent, origin='upper', interpolation='nearest')
-        if np.nanmax(ice_mask.values) > 0.1:
-            ax.imshow(ice_mask, cmap=get_colormap('ice'), vmin=0.1, vmax=5, extent=extent, origin='upper', interpolation='nearest')
+        # The extent must match the sliced coordinates exactly
+        extent = [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP]
+
+        # Use origin='upper' because we sorted latitude as Descending (Top = Max Lat)
+        if np.nanmax(rain.values) > 0.1:
+            ax.imshow(rain.values, cmap=get_colormap('rain'), vmin=0.1, vmax=15, extent=extent, origin='upper', interpolation='nearest')
+        if np.nanmax(snow.values) > 0.1:
+            ax.imshow(snow.values, cmap=get_colormap('snow'), vmin=0.1, vmax=5, extent=extent, origin='upper', interpolation='nearest')
+        if np.nanmax(ice.values) > 0.1:
+            ax.imshow(ice.values, cmap=get_colormap('ice'), vmin=0.1, vmax=5, extent=extent, origin='upper', interpolation='nearest')
 
         img_name = "master.png" if index == 0 else f"master_{index}.png"
-        # DO NOT use bbox_inches='tight' here; it causes the shifting you saw.
+        
+        # CRITICAL: Do NOT use bbox_inches='tight'. It re-crops the image and breaks the alignment.
         plt.savefig(os.path.join(OUTPUT_DIR, img_name), transparent=True, pad_inches=0)
         plt.close()
 
-        # Metadata (UTC -> ET)
+        # 4. Save Metadata
         utc_dt = datetime.fromtimestamp(ds_rate.time.values.astype(int) * 1e-9, tz=timezone.utc)
         et_dt = utc_dt.astimezone(pytz.timezone('US/Eastern'))
         
         meta = {
             "bounds": [[LAT_BOT, LON_LEFT], [LAT_TOP, LON_RIGHT]],
-            "time": et_dt.strftime("%I:%M %p ET")
+            "time": et_dt.strftime("%I:%M %p ET"),
+            "vmax_applied": 15
         }
         
         with open(os.path.join(OUTPUT_DIR, f"metadata_{index}.json"), "w") as f:
             json.dump(meta, f)
             
-        print(f"Verified Frame {index}: {meta['time']}")
+        print(f"Processed {img_name} - Time: {meta['time']}")
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error on frame {index}: {e}")
     finally:
         for f in ["rate.grib2", "flag.grib2"]:
             if os.path.exists(f): os.remove(f)
@@ -133,12 +140,15 @@ def process_frame(index, rate_key, flag_keys):
 if __name__ == "__main__":
     RATE_PREFIX = discover_rate_prefix()
     now_utc = datetime.now(timezone.utc)
-    date_str = now_utc.strftime("%Y%m%d")
     
-    rate_keys = get_s3_keys(date_str, RATE_PREFIX)
-    flag_keys = get_s3_keys(date_str, FLAG_PREFIX)
-    
-    if len(rate_keys) >= NUM_FRAMES:
-        latest = sorted(rate_keys)[-NUM_FRAMES:][::-1]
-        for idx, r_key in enumerate(latest):
-            process_frame(idx, r_key, flag_keys)
+    # Try today's folder, then yesterday's if it's early morning
+    for d in range(2):
+        date_str = (now_utc - timedelta(days=d)).strftime("%Y%m%d")
+        rate_keys = get_s3_keys(date_str, RATE_PREFIX)
+        flag_keys = get_s3_keys(date_str, FLAG_PREFIX)
+        
+        if len(rate_keys) >= NUM_FRAMES:
+            latest = sorted(rate_keys)[-NUM_FRAMES:][::-1]
+            for idx, r_key in enumerate(latest):
+                process_frame(idx, r_key, flag_keys)
+            break
