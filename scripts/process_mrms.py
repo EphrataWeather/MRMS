@@ -153,7 +153,7 @@ def process_frame(index, rate_key, flag_keys):
         extent = [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP]
 
         if rain_mask.max() > 0:
-            ax.imshow(rain_mask.where(rain_mask > 0.1), cmap=get_colormap('rain'), vmin=0.1, vmax=5, extent=extent, aspect='equal', interpolation='nearest')
+            ax.imshow(rain_mask.where(rain_mask > 0.1), cmap=get_colormap('rain'), vmin=0.1, vmax=10, extent=extent, aspect='equal', interpolation='nearest')
         if snow_mask.max() > 0:
             ax.imshow(snow_mask.where(snow_mask > 0.1), cmap=get_colormap('snow'), vmin=0.1, vmax=5, extent=extent, aspect='equal', interpolation='nearest')
         if ice_mask.max() > 0:
