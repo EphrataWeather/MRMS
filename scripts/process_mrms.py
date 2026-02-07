@@ -164,7 +164,7 @@ def process_frame(index, rate_key, flag_keys):
         save_path = os.path.join(OUTPUT_DIR, fname)
         
         # INCREASE DPI HERE: 200-300 makes it look sharp on 4K screens
-        plt.savefig(save_path, transparent=True, dpi=200, bbox_inches='tight', pad_inches=0)
+        plt.savefig(save_path, transparent=True, dpi=800, bbox_inches='tight', pad_inches=0)
         plt.close()
         plt.close()
         print(f"Saved {fname}")
