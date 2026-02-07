@@ -1,25 +1,48 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Professional MRMS Radar</title>
+    <title>MRMS Interactive Radar</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; padding: 0; background: #1a1a1a; color: white; font-family: sans-serif; }
-        #map { height: 100vh; width: 100vw; background: #0b1116; }
-        .ui-panel {
-            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
-            z-index: 1000; background: rgba(0,0,0,0.8); padding: 15px 25px;
-            border-radius: 50px; border: 1px solid #444; display: flex; align-items: center; gap: 20px;
+        body { margin: 0; padding: 0; background: #0b1116; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: white; }
+        #map { height: 100vh; width: 100vw; }
+
+        /* FIX BLURRY IMAGE: Force browser to keep pixel edges sharp */
+        .leaflet-image-layer {
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            image-rendering: pixelated;
         }
-        #timestamp { font-weight: bold; min-width: 150px; text-align: center; color: #00e6ff; }
+
+        .ui-panel {
+            position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+            z-index: 1000; background: rgba(15, 23, 30, 0.95); padding: 15px 30px;
+            border-radius: 12px; border: 1px solid #30363d; display: flex; align-items: center; 
+            gap: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); min-width: 500px;
+        }
+
+        #play-btn {
+            background: #00e6ff; border: none; width: 40px; height: 40px; border-radius: 50%;
+            cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center;
+        }
+
+        #play-btn:hover { background: #00c8e0; }
+
+        #timeline {
+            flex-grow: 1; cursor: pointer; accent-color: #00e6ff;
+        }
+
+        #timestamp { font-weight: bold; width: 140px; font-family: monospace; font-size: 14px; }
+
         .legend {
             position: absolute; top: 20px; right: 20px; z-index: 1000;
-            background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; font-size: 12px;
+            background: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px; font-size: 11px;
+            text-transform: uppercase; letter-spacing: 1px;
         }
-        .legend-item { display: flex; align-items: center; margin-bottom: 5px; }
-        .color-box { width: 15px; height: 15px; margin-right: 8px; border-radius: 2px; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 6px; }
+        .color-box { width: 24px; height: 12px; margin-right: 10px; border-radius: 2px; }
     </style>
 </head>
 <body>
@@ -27,75 +50,95 @@
 <div id="map"></div>
 
 <div class="ui-panel">
-    <div id="timestamp">Loading Radar...</div>
+    <button id="play-btn">⏸</button>
+    <input type="range" id="timeline" min="0" max="9" value="0">
+    <div id="timestamp">Loading...</div>
 </div>
 
 <div class="legend">
-    <div class="legend-item"><div class="color-box" style="background: #00bb00"></div> Rain</div>
+    <div class="legend-item"><div class="color-box" style="background: linear-gradient(to right, #00fb90, #ff0000)"></div> Rain</div>
     <div class="legend-item"><div class="color-box" style="background: #00ffff"></div> Snow</div>
-    <div class="legend-item"><div class="color-box" style="background: #ff00ff"></div> Ice/Mix</div>
+    <div class="legend-item"><div class="color-box" style="background: #ff00ff"></div> Ice</div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    const map = L.map('map', {
-        center: [38, -97],
-        zoom: 5,
-        zoomControl: false
-    });
-
-    // Dark professional base map
+    const map = L.map('map', { center: [38, -97], zoom: 5, zoomControl: false });
+    
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
     let frames = [];
-    let currentFrameIndex = 0;
-    let imageOverlay = null;
+    let currentIdx = 0;
+    let isPlaying = true;
+    let overlay = null;
+    let timer = null;
+    let metadata = null;
 
-    async function initRadar() {
+    async function init() {
         try {
-            // 1. Fetch metadata to get the geographical bounds
-            const response = await fetch('data/metadata_0.json');
-            const meta = await response.json();
-            const bounds = meta.bounds; // [[latBot, lonLeft], [latTop, lonRight]]
+            const res = await fetch('data/metadata_0.json');
+            metadata = await res.json();
             
-            document.getElementById('timestamp').innerText = meta.time;
+            // Build frame array: master_9 (oldest) to master (newest)
+            frames = [];
+            for(let i=9; i>=1; i--) frames.push(`data/master_${i}.png`);
+            frames.push(`data/master.png`);
 
-            // 2. Setup Frame list (0 to 9)
-            // master.png is latest, master_1.png is older, etc.
-            // We reverse them so the animation plays forward in time
-            const frameNames = ['master.png', 'master_1.png', 'master_2.png', 'master_3.png', 'master_4.png', 'master_5.png'];
-            frames = frameNames.reverse().map(name => `data/${name}`);
+            // Initial Overlay
+            overlay = L.imageOverlay(frames[9], metadata.bounds, { opacity: 0.8 }).addTo(map);
+            
+            updateDisplay(9);
+            startLoop();
 
-            // 3. Create the overlay
-            imageOverlay = L.imageOverlay(frames[0], bounds, {
-                opacity: 0.8,
-                interactive: false
-            }).addTo(map);
+            // Event Listeners
+            document.getElementById('timeline').addEventListener('input', (e) => {
+                pauseLoop();
+                updateDisplay(parseInt(e.target.value));
+            });
 
-            // 4. Start Animation Loop
-            setInterval(() => {
-                currentFrameIndex = (currentFrameIndex + 1) % frames.length;
-                imageOverlay.setUrl(frames[currentFrameIndex]);
-                
-                // If it's the latest frame, show the real time, otherwise show "Looping"
-                if (currentFrameIndex === frames.length - 1) {
-                    document.getElementById('timestamp').style.color = "#00e6ff";
-                    document.getElementById('timestamp').innerText = meta.time;
-                } else {
-                    document.getElementById('timestamp').style.color = "#aaa";
-                    document.getElementById('timestamp').innerText = "Past 60 mins...";
-                }
-            }, 600); // 600ms per frame
+            document.getElementById('play-btn').addEventListener('click', () => {
+                isPlaying ? pauseLoop() : startLoop();
+            });
 
         } catch (e) {
-            console.error("Error loading radar data:", e);
-            document.getElementById('timestamp').innerText = "Radar Offline";
+            document.getElementById('timestamp').innerText = "Offline";
         }
     }
 
-    initRadar();
+    function updateDisplay(index) {
+        currentIdx = index;
+        overlay.setUrl(frames[index]);
+        document.getElementById('timeline').value = index;
+        
+        // Simple time labeling
+        if (index === 9) {
+            document.getElementById('timestamp').innerText = metadata.time;
+            document.getElementById('timestamp').style.color = "#00e6ff";
+        } else {
+            let minsAgo = (9 - index) * 10;
+            document.getElementById('timestamp').innerText = `-${minsAgo} MINS`;
+            document.getElementById('timestamp').style.color = "#888";
+        }
+    }
+
+    function startLoop() {
+        isPlaying = true;
+        document.getElementById('play-btn').innerText = "⏸";
+        timer = setInterval(() => {
+            currentIdx = (currentIdx + 1) % frames.length;
+            updateDisplay(currentIdx);
+        }, 600);
+    }
+
+    function pauseLoop() {
+        isPlaying = false;
+        document.getElementById('play-btn').innerText = "▶";
+        clearInterval(timer);
+    }
+
+    init();
 </script>
 </body>
 </html>
