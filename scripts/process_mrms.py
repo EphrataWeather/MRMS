@@ -11,8 +11,8 @@ from matplotlib.colors import ListedColormap
 from datetime import datetime, timezone, timedelta
 
 # --- CONFIGURATION ---
-LAT_TOP, LAT_BOT = 50.0, 23.0
-LON_LEFT, LON_RIGHT = -125.0, -66.5
+LAT_TOP, LAT_BOT = 50.0, 20.0
+LON_LEFT, LON_RIGHT = -130.0, -60.0
 OUTPUT_DIR = "public/data"
 NUM_FRAMES = 10
 os.makedirs(OUTPUT_DIR, exist_ok=True)
