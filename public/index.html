@@ -1,142 +1,218 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MRMS Interactive Radar</title>
+    <title>NexGen Radar Viewer</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; padding: 0; background: #0b1116; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: white; }
-        #map { height: 100vh; width: 100vw; }
+        body { margin: 0; padding: 0; background: #050a14; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+        #map { height: 100vh; width: 100vw; background: #050a14; }
 
-        /* FIX BLURRY IMAGE: Force browser to keep pixel edges sharp */
+        /* Crisp Radar Rendering */
         .leaflet-image-layer {
-            image-rendering: -webkit-optimize-contrast;
+            image-rendering: pixelated; 
             image-rendering: crisp-edges;
-            image-rendering: pixelated;
         }
 
-        .ui-panel {
-            position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
-            z-index: 1000; background: rgba(15, 23, 30, 0.95); padding: 15px 30px;
-            border-radius: 12px; border: 1px solid #30363d; display: flex; align-items: center; 
-            gap: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); min-width: 500px;
+        /* LIQUID GLASS UI CONTAINER */
+        .glass-panel {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            z-index: 1000;
+            
+            /* Navy Blue Glass Effect */
+            background: rgba(10, 25, 41, 0.75);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6);
+            
+            padding: 15px 25px;
+            border-radius: 20px;
+            display: flex; flex-direction: column; gap: 10px;
+            min-width: 320px; color: white;
         }
 
-        #play-btn {
-            background: #00e6ff; border: none; width: 40px; height: 40px; border-radius: 50%;
-            cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center;
+        .controls-row { display: flex; align-items: center; justify-content: space-between; gap: 15px; }
+
+        /* Play Button */
+        .play-btn {
+            background: linear-gradient(135deg, #00c6ff, #0072ff);
+            border: none; width: 45px; height: 45px; border-radius: 50%;
+            cursor: pointer; color: white; font-size: 20px;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 4px 15px rgba(0, 114, 255, 0.4);
+            transition: transform 0.2s;
+        }
+        .play-btn:active { transform: scale(0.95); }
+
+        /* Sliders */
+        input[type=range] {
+            -webkit-appearance: none; width: 100%; background: transparent;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 6px; background: rgba(255,255,255,0.2); border-radius: 3px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 18px; width: 18px; border-radius: 50%;
+            background: #00c6ff; margin-top: -6px; box-shadow: 0 0 10px rgba(0,198,255,0.5);
+            cursor: pointer;
         }
 
-        #play-btn:hover { background: #00c8e0; }
+        /* Labels */
+        .time-label { font-size: 24px; font-weight: 600; letter-spacing: 0.5px; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+        .sub-label { font-size: 11px; color: #a0aec0; text-transform: uppercase; letter-spacing: 1px; }
 
-        #timeline {
-            flex-grow: 1; cursor: pointer; accent-color: #00e6ff;
-        }
-
-        #timestamp { font-weight: bold; width: 140px; font-family: monospace; font-size: 14px; }
-
-        .legend {
+        /* Legend */
+        .legend-glass {
             position: absolute; top: 20px; right: 20px; z-index: 1000;
-            background: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px; font-size: 11px;
-            text-transform: uppercase; letter-spacing: 1px;
+            background: rgba(10, 25, 41, 0.75); backdrop-filter: blur(10px);
+            padding: 15px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);
         }
-        .legend-item { display: flex; align-items: center; margin-bottom: 6px; }
-        .color-box { width: 24px; height: 12px; margin-right: 10px; border-radius: 2px; }
+        .legend-item { display: flex; align-items: center; font-size: 12px; margin-bottom: 5px; color: #e2e8f0; }
+        .color-dot { width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; }
+
     </style>
 </head>
 <body>
 
 <div id="map"></div>
 
-<div class="ui-panel">
-    <button id="play-btn">⏸</button>
-    <input type="range" id="timeline" min="0" max="9" value="0">
-    <div id="timestamp">Loading...</div>
+<div class="legend-glass">
+    <div class="legend-item"><div class="color-dot" style="background: #00ff00"></div> Rain</div>
+    <div class="legend-item"><div class="color-dot" style="background: #00ffff"></div> Snow</div>
+    <div class="legend-item"><div class="color-dot" style="background: #ff00ff"></div> Ice</div>
 </div>
 
-<div class="legend">
-    <div class="legend-item"><div class="color-box" style="background: linear-gradient(to right, #00fb90, #ff0000)"></div> Rain</div>
-    <div class="legend-item"><div class="color-box" style="background: #00ffff"></div> Snow</div>
-    <div class="legend-item"><div class="color-box" style="background: #ff00ff"></div> Ice</div>
+<div class="glass-panel">
+    <div style="text-align: center; margin-bottom: 5px;">
+        <div id="time-display" class="time-label">Loading...</div>
+        <div id="date-display" class="sub-label">WAITING FOR DATA</div>
+    </div>
+
+    <div class="controls-row">
+        <button id="play-btn" class="play-btn">▶</button>
+        <div style="flex-grow: 1;">
+            <input type="range" id="timeline" min="0" max="9" step="1" value="0">
+        </div>
+    </div>
+
+    <div class="controls-row" style="margin-top: 5px;">
+        <span class="sub-label">Opacity</span>
+        <input type="range" id="opacity-slider" min="0" max="1" step="0.1" value="0.8">
+    </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    const map = L.map('map', { center: [38, -97], zoom: 5, zoomControl: false });
-    
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap'
+    // 1. Initialize Map with a Dark Base
+    const map = L.map('map', { 
+        center: [38, -95], 
+        zoom: 5, 
+        zoomControl: false,
+        attributionControl: false
+    });
+
+    // 2. Base Layer (Dark Matter) - Bottommost
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+        pane: 'tilePane'
+    }).addTo(map);
+
+    // 3. Create a Custom Pane for Radar (So it sits BELOW labels)
+    map.createPane('radarPane');
+    map.getPane('radarPane').style.zIndex = 200; // Between tiles (0) and shadows (400)
+    map.getPane('radarPane').style.pointerEvents = 'none'; // Click through radar
+
+    // 4. Labels Layer (Towns/Borders) - Topmost
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+        pane: 'markerPane', // Ensures labels are on top of radar
+        zIndex: 600
     }).addTo(map);
 
     let frames = [];
     let currentIdx = 0;
-    let isPlaying = true;
+    let isPlaying = false;
     let overlay = null;
     let timer = null;
     let metadata = null;
+    const NUM_FRAMES = 10;
 
     async function init() {
         try {
             const res = await fetch('data/metadata_0.json');
             metadata = await res.json();
             
-            // Build frame array: master_9 (oldest) to master (newest)
+            // Generate file paths (master_9.png is oldest, master.png is newest)
             frames = [];
-            for(let i=9; i>=1; i--) frames.push(`data/master_${i}.png`);
+            for(let i=NUM_FRAMES-1; i>=1; i--) frames.push(`data/master_${i}.png`);
             frames.push(`data/master.png`);
 
-            // Initial Overlay
-            overlay = L.imageOverlay(frames[9], metadata.bounds, { opacity: 0.8 }).addTo(map);
+            // Add Initial Radar Overlay to custom pane
+            overlay = L.imageOverlay(frames[0], metadata.bounds, { 
+                pane: 'radarPane',
+                opacity: 0.8 
+            }).addTo(map);
+
+            // Update UI
+            updateFrame(0);
             
-            updateDisplay(9);
-            startLoop();
-
-            // Event Listeners
-            document.getElementById('timeline').addEventListener('input', (e) => {
-                pauseLoop();
-                updateDisplay(parseInt(e.target.value));
-            });
-
-            document.getElementById('play-btn').addEventListener('click', () => {
-                isPlaying ? pauseLoop() : startLoop();
-            });
+            // Auto-start
+            togglePlay();
 
         } catch (e) {
-            document.getElementById('timestamp').innerText = "Offline";
+            console.error(e);
+            document.getElementById('time-display').innerText = "OFFLINE";
         }
     }
 
-    function updateDisplay(index) {
+    function updateFrame(index) {
         currentIdx = index;
         overlay.setUrl(frames[index]);
         document.getElementById('timeline').value = index;
-        
-        // Simple time labeling
-        if (index === 9) {
-            document.getElementById('timestamp').innerText = metadata.time;
-            document.getElementById('timestamp').style.color = "#00e6ff";
+
+        // Calculate Time Display
+        // Each frame is roughly 10-15 mins apart, but we base it on the newest frame time
+        if (index === NUM_FRAMES - 1) {
+            // Latest Frame
+            document.getElementById('time-display').innerText = metadata.time;
+            document.getElementById('date-display').innerText = "LIVE RADAR";
+            document.getElementById('time-display').style.color = "#00c6ff";
         } else {
-            let minsAgo = (9 - index) * 10;
-            document.getElementById('timestamp').innerText = `-${minsAgo} MINS`;
-            document.getElementById('timestamp').style.color = "#888";
+            // Past Frames
+            const diff = (NUM_FRAMES - 1 - index) * 10; // Approx 10 mins per frame
+            document.getElementById('time-display').innerText = `-${diff} MINS`;
+            document.getElementById('date-display').innerText = "PAST LOOP";
+            document.getElementById('time-display').style.color = "#ffffff";
         }
     }
 
-    function startLoop() {
-        isPlaying = true;
-        document.getElementById('play-btn').innerText = "⏸";
-        timer = setInterval(() => {
-            currentIdx = (currentIdx + 1) % frames.length;
-            updateDisplay(currentIdx);
-        }, 600);
+    function togglePlay() {
+        isPlaying = !isPlaying;
+        const btn = document.getElementById('play-btn');
+        
+        if (isPlaying) {
+            btn.innerText = "⏸";
+            timer = setInterval(() => {
+                let nextIdx = (currentIdx + 1) % NUM_FRAMES;
+                updateFrame(nextIdx);
+            }, 600);
+        } else {
+            btn.innerText = "▶";
+            clearInterval(timer);
+        }
     }
 
-    function pauseLoop() {
-        isPlaying = false;
-        document.getElementById('play-btn').innerText = "▶";
-        clearInterval(timer);
-    }
+    // --- Event Listeners ---
+    document.getElementById('play-btn').addEventListener('click', togglePlay);
+
+    document.getElementById('timeline').addEventListener('input', (e) => {
+        if(isPlaying) togglePlay(); // Pause if user drags
+        updateFrame(parseInt(e.target.value));
+    });
+
+    document.getElementById('opacity-slider').addEventListener('input', (e) => {
+        if(overlay) overlay.setOpacity(e.target.value);
+    });
 
     init();
 </script>
