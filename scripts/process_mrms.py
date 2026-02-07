@@ -153,11 +153,11 @@ def process_frame(index, rate_key, flag_keys):
         extent = [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP]
 
         if rain_mask.max() > 0:
-            ax.imshow(rain_mask.where(rain_mask > 0.1), cmap=get_colormap('rain'), vmin=0.1, vmax=50, extent=extent, aspect='equal', interpolation='nearest')
+            ax.imshow(rain_mask.where(rain_mask > 0.1), cmap=get_colormap('rain'), vmin=0.1, vmax=5, extent=extent, aspect='equal', interpolation='nearest')
         if snow_mask.max() > 0:
-            ax.imshow(snow_mask.where(snow_mask > 0.1), cmap=get_colormap('snow'), vmin=0.1, vmax=50, extent=extent, aspect='equal', interpolation='nearest')
+            ax.imshow(snow_mask.where(snow_mask > 0.1), cmap=get_colormap('snow'), vmin=0.1, vmax=5, extent=extent, aspect='equal', interpolation='nearest')
         if ice_mask.max() > 0:
-            ax.imshow(ice_mask.where(ice_mask > 0.1), cmap=get_colormap('ice'), vmin=0.1, vmax=50, extent=extent, aspect='equal', interpolation='nearest')
+            ax.imshow(ice_mask.where(ice_mask > 0.1), cmap=get_colormap('ice'), vmin=0.1, vmax=5, extent=extent, aspect='equal', interpolation='nearest')
       
         plt.axis('off')
         fname = "master.png" if index == 0 else f"master_{index}.png"
