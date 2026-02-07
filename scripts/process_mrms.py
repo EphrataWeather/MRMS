@@ -103,12 +103,25 @@ def download_and_extract(key, filename):
         raise
 
 def get_colormap(p_type):
+    """Professional high-contrast palettes (Weather Channel / AccuWeather style)"""
     if p_type == 'snow':
-        return ListedColormap(['#d9ebff', '#89a9ff', '#5a82ff', '#2d58ff', '#0026ff'])
+        # Cyan to White to Deep Blue
+        return ListedColormap(['#00ffff', '#80ffff', '#ffffff', '#adc5ff', '#5a82ff'])
     elif p_type == 'ice':
-        return ListedColormap(['#ffdaff', '#ffb3ff', '#ff80ff', '#e600e6', '#b300b3'])
+        # Hot Pink to Deep Purple
+        return ListedColormap(['#ff00ff', '#d100d1', '#910091', '#4b0082'])
     else: 
-        return ListedColormap(['#00fb90', '#00bb00', '#ffff00', '#ff9100', '#ff0000', '#d20000'])
+        # The classic Radar 'Rain' Scale: Light Green -> Dark Green -> Yellow -> Red -> Maroon
+        return ListedColormap([
+            '#00fb90', # Light Green
+            '#00bb00', # Solid Green
+            '#008800', # Dark Green
+            '#ffff00', # Yellow
+            '#ff9100', # Orange
+            '#ff0000', # Red
+            '#d20000', # Deep Red
+            '#910000'  # Maroon/Extreme
+        ])
 
 def process_frame(index, rate_key, flag_keys):
     timestamp = rate_key.split('_')[-1].split('.')[0]
