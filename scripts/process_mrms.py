@@ -11,29 +11,32 @@ from datetime import datetime, timezone, timedelta
 import pytz
 
 # --- CONFIGURATION ---
-# We use integers/exact decimals to prevent floating point drift
-LAT_TOP, LAT_BOT = 50.0, 20.0
-LON_LEFT, LON_RIGHT = -130.0, -60.0
+LAT_TOP, LAT_BOT = 50.0, 22.0
+LON_LEFT, LON_RIGHT = -128.0, -65.0
 OUTPUT_DIR = "public/data"
-NUM_FRAMES = 10
+NUM_FRAMES = 15
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# --- COLOR DEFINITIONS (RGBA) ---
-# Format: (R, G, B, A)
+# RGBA scale for Vmax = 15
 RAIN_COLORS = [
     (0, 251, 144, 255), (0, 187, 0, 255), (0, 136, 0, 255),
     (255, 255, 0, 255), (255, 145, 0, 255), (255, 0, 0, 255),
     (210, 0, 0, 255), (145, 0, 0, 255)
 ]
 
-def get_color_for_value(val, vmax=15.0):
-    if val < 0.1 or np.isnan(val): return (0, 0, 0, 0)
-    idx = int((val / vmax) * (len(RAIN_COLORS) - 1))
-    idx = min(max(idx, 0), len(RAIN_COLORS) - 1)
-    return RAIN_COLORS[idx]
-
-# --- S3 HELPERS ---
 BUCKET_URL = "https://noaa-mrms-pds.s3.amazonaws.com"
+
+def discover_prefix():
+    """Finds the correct SurfacePrecipRate folder on S3."""
+    url = f"{BUCKET_URL}/?list-type=2&prefix=CONUS/&delimiter=/"
+    try:
+        r = requests.get(url, timeout=10)
+        root = ET.fromstring(r.content)
+        for e in root.iter():
+            if e.tag.endswith('Prefix') and ("SurfacePrecipRate" in e.text or "PrecipRate" in e.text):
+                return e.text.rstrip("/")
+    except: pass
+    return "CONUS/SurfacePrecipRate_00.00"
 
 def get_s3_keys(date_str, prefix):
     url = f"{BUCKET_URL}/?list-type=2&prefix={prefix}/{date_str}/"
@@ -51,77 +54,77 @@ def download_and_extract(key, filename):
         shutil.copyfileobj(f_in, f_out)
     os.remove(filename + ".gz")
 
-def process_frame(index, rate_key):
+def process_frame(index, key):
     try:
-        download_and_extract(rate_key, f"rate_{index}.grib2")
-        ds = xr.open_dataset(f"rate_{index}.grib2", engine="cfgrib")
+        temp_grib = f"temp_{index}.grib2"
+        download_and_extract(key, temp_grib)
+        ds = xr.open_dataset(temp_grib, engine="cfgrib")
         
-        # 1. Normalize Longitude and Sort
+        # 1. Coordinate Normalization
         ds.coords['longitude'] = ((ds.longitude + 180) % 360) - 180
-        # CRITICAL: Force North-to-South and West-to-East
+        
+        # Force Latitude to be Descending (North at index 0)
+        # Force Longitude to be Ascending (West at index 0)
         ds = ds.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
         
-        # 2. Slice strictly
-        data_var = list(ds.data_vars)[0]
-        subset = ds[data_var].sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
+        # 2. Slice (Always [Max, Min] for descending coordinates)
+        subset = ds.sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
         
-        # 3. Create Image Array (Height, Width, RGBA)
-        raw_values = subset.values
-        height, width = raw_values.shape
-        rgba_data = np.zeros((height, width, 4), dtype=np.uint8)
+        # Determine the data variable (usually 'unknown' or 'paramId_0')
+        var_name = [v for v in subset.data_vars if 'latitude' in subset[v].coords][0]
+        data = subset[var_name].values
+        
+        if data.size == 0:
+            print(f"Frame {index}: Slice resulted in empty data.")
+            return
 
-        # Apply the Rain scale (vmax=15)
-        # Vectorized coloring for speed
+        # 3. Build RGBA Image with PIL
+        height, width = data.shape
+        rgba = np.zeros((height, width, 4), dtype=np.uint8)
+        
+        # Apply Vmax = 15 scaling
         vmax = 15.0
-        mask = (raw_values >= 0.1) & (~np.isnan(raw_values))
-        indices = ((raw_values[mask] / vmax) * (len(RAIN_COLORS) - 1)).astype(int)
-        indices = np.clip(indices, 0, len(RAIN_COLORS) - 1)
-        
-        # Fill RGBA
-        colors_np = np.array(RAIN_COLORS, dtype=np.uint8)
-        rgba_data[mask] = colors_np[indices]
+        mask = (data >= 0.1) & (~np.isnan(data))
+        if np.any(mask):
+            indices = ((data[mask] / vmax) * (len(RAIN_COLORS) - 1)).astype(int)
+            indices = np.clip(indices, 0, len(RAIN_COLORS) - 1)
+            colors_np = np.array(RAIN_COLORS, dtype=np.uint8)
+            rgba[mask] = colors_np[indices]
 
-        # 4. Save via PIL (Ensures No Margins)
-        img = Image.fromarray(rgba_data, 'RGBA')
-        img_name = "master.png" if index == 0 else f"master_{index}.png"
-        img.save(os.path.join(OUTPUT_DIR, img_name))
+        # 4. Save Image
+        img = Image.fromarray(rgba, 'RGBA')
+        name = "master.png" if index == 0 else f"master_{index}.png"
+        img.save(os.path.join(OUTPUT_DIR, name))
 
-        # 5. Metadata (Use the EXACT coordinates from the data subset)
-        # This eliminates the "Floating" issue by telling Leaflet exactly where the pixels end
-        actual_bounds = [
-            [float(subset.latitude.min()), float(subset.longitude.min())], # South West
-            [float(subset.latitude.max()), float(subset.longitude.max())]  # North East
-        ]
-        
-        utc_dt = datetime.fromtimestamp(ds.time.values.astype(int) * 1e-9, tz=timezone.utc)
-        et_dt = utc_dt.astimezone(pytz.timezone('US/Eastern'))
-        
+        # 5. Metadata (Pull actual edge coordinates to prevent drift)
         meta = {
-            "bounds": actual_bounds,
-            "time": et_dt.strftime("%I:%M %p ET")
+            "bounds": [
+                [float(subset.latitude.min()), float(subset.longitude.min())],
+                [float(subset.latitude.max()), float(subset.longitude.max())]
+            ],
+            "time": datetime.now(pytz.timezone('US/Eastern')).strftime("%I:%M %p ET")
         }
         
         with open(os.path.join(OUTPUT_DIR, f"metadata_{index}.json"), "w") as f:
             json.dump(meta, f)
-            
-        print(f"Frame {index} generated with vmax=15 and strict bounds.")
+
+        print(f"Successfully created {name}")
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Failed frame {index}: {e}")
     finally:
-        f_path = f"rate_{index}.grib2"
-        if os.path.exists(f_path): os.remove(f_path)
+        if os.path.exists(temp_grib): os.remove(temp_grib)
 
 if __name__ == "__main__":
-    # Note: SurfacePrecipRate_00.00 is the most common key
-    PREFIX = "CONUS/SurfacePrecipRate_00.00"
-    now_utc = datetime.now(timezone.utc)
+    PREFIX = discover_prefix()
+    print(f"Using Prefix: {PREFIX}")
     
-    for d in range(2):
-        date_str = (now_utc - timedelta(days=d)).strftime("%Y%m%d")
+    now = datetime.now(timezone.utc)
+    for i in range(2):
+        date_str = (now - timedelta(days=i)).strftime("%Y%m%d")
         keys = get_s3_keys(date_str, PREFIX)
-        if len(keys) >= NUM_FRAMES:
-            latest = sorted(keys)[-NUM_FRAMES:][::-1]
-            for idx, k in enumerate(latest):
+        if keys:
+            latest_keys = sorted(keys)[-NUM_FRAMES:][::-1]
+            for idx, k in enumerate(latest_keys):
                 process_frame(idx, k)
             break
