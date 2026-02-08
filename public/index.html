@@ -1,185 +1,115 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Precision Weather Radar</title>
+    <title>Live MRMS Radar</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; background: #050a14; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
-        #map { height: 100vh; width: 100vw; background: #050a14; }
-        .leaflet-image-layer { image-rendering: pixelated; }
-
-        /* --- GLASS UI --- */
-        .glass-panel {
-            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
-            z-index: 1000; background: rgba(10, 25, 41, 0.85); backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.1); padding: 15px 25px; border-radius: 20px;
-            display: flex; flex-direction: column; gap: 10px; min-width: 350px; color: white;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        body { margin: 0; padding: 0; background: #1a1a1a; font-family: sans-serif; }
+        #map { height: 100vh; width: 100vw; }
+        #ui-overlay {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            z-index: 1000; background: rgba(0,0,0,0.8); color: white;
+            padding: 15px 25px; border-radius: 30px; border: 1px solid #444;
+            display: flex; align-items: center; gap: 20px; pointer-events: auto;
         }
-
-        /* --- DETAILED LEGEND --- */
-        .legend-container {
-            position: absolute; top: 20px; right: 20px; z-index: 1000;
-            background: rgba(10, 25, 41, 0.9); backdrop-filter: blur(8px);
-            padding: 15px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);
-            color: white; font-size: 11px; width: 140px;
-        }
-        .legend-title { font-weight: bold; margin-bottom: 8px; text-transform: uppercase; color: #a0aec0; letter-spacing: 1px; }
-        
-        .scale-row { display: flex; height: 12px; margin-bottom: 4px; border-radius: 2px; overflow: hidden; }
-        .scale-item { flex: 1; height: 100%; }
-        
-        .scale-labels { display: flex; justify-content: space-between; margin-bottom: 12px; color: #ccc; font-size: 9px; }
-
-        /* COLORS (Must match Python) */
-        /* RAIN: Light Green -> Dark Green -> Yellow -> Orange -> Red -> Maroon */
-        .rain-1 { background: #00fb90; } .rain-2 { background: #00bb00; }
-        .rain-3 { background: #008800; } .rain-4 { background: #ffff00; }
-        .rain-5 { background: #ff9100; } .rain-6 { background: #ff0000; }
-        .rain-7 { background: #d20000; } .rain-8 { background: #910000; }
-
-        /* SNOW: Cyan -> White -> Blue */
-        .snow-1 { background: #00ffff; } .snow-2 { background: #ffffff; } .snow-3 { background: #5a82ff; }
-
-        /* ICE: Pink -> Purple */
-        .ice-1 { background: #ff00ff; } .ice-2 { background: #910091; }
-
-        /* --- CONTROLS --- */
-        .time-display { font-size: 20px; font-weight: 700; text-align: center; color: #00c6ff; text-shadow: 0 0 10px rgba(0,198,255,0.3); }
-        .controls-row { display: flex; align-items: center; gap: 15px; margin-top: 5px; }
-        
-        button { background: #00c6ff; border: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
-        button:hover { background: #fff; transform: scale(1.1); }
-        
-        input[type=range] { flex-grow: 1; accent-color: #00c6ff; cursor: pointer; }
+        .time-display { font-weight: bold; font-size: 1.2rem; min-width: 120px; text-align: center; }
+        .controls button { background: #444; border: none; color: white; padding: 8px 15px; cursor: pointer; border-radius: 5px; }
+        .controls button:hover { background: #666; }
     </style>
 </head>
 <body>
 
+<div id="ui-overlay">
+    <div id="timestamp" class="time-display">Loading...</div>
+    <div class="controls">
+        <button onclick="prevFrame()">Prev</button>
+        <button id="playPause" onclick="togglePlay()">Pause</button>
+        <button onclick="nextFrame()">Next</button>
+    </div>
+</div>
+
 <div id="map"></div>
-
-<div class="legend-container">
-    <div class="legend-title">Rain Intensity</div>
-    <div class="scale-row">
-        <div class="scale-item rain-1"></div><div class="scale-item rain-2"></div>
-        <div class="scale-item rain-3"></div><div class="scale-item rain-4"></div>
-        <div class="scale-item rain-5"></div><div class="scale-item rain-6"></div>
-        <div class="scale-item rain-7"></div><div class="scale-item rain-8"></div>
-    </div>
-    <div class="scale-labels"><span>Light</span><span>Heavy</span><span>Extreme</span></div>
-
-    <div class="legend-title">Snow</div>
-    <div class="scale-row">
-        <div class="scale-item snow-1"></div><div class="scale-item snow-2"></div><div class="scale-item snow-3"></div>
-    </div>
-
-    <div class="legend-title" style="margin-top:8px;">Ice / Mix</div>
-    <div class="scale-row">
-        <div class="scale-item ice-1"></div><div class="scale-item ice-2"></div>
-    </div>
-</div>
-
-<div class="glass-panel">
-    <div id="clock" class="time-display">Loading Data...</div>
-    <div class="controls-row">
-        <button id="play-btn">⏸</button>
-        <input type="range" id="scrubber" min="0" max="9" value="0">
-    </div>
-</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    // 1. MAP SETUP
-    const map = L.map('map', { center: [38, -95], zoom: 5, zoomControl: false });
-    
-    // Dark Base
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
+    const map = L.map('map', {
+        center: [38.0, -95.0],
+        zoom: 5,
+        backgroundColor: '#111'
+    });
 
-    // Radar Pane (Below labels)
-    map.createPane('radar');
-    map.getPane('radar').style.zIndex = 200;
-    map.getPane('radar').style.pointerEvents = 'none';
+    // Dark theme for radar contrast
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
 
-    // Labels (Above radar)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'popupPane', zIndex: 600 }).addTo(map);
-
-    // 2. STATE
-    const TOTAL_FRAMES = 15;
-    let frames = [];     // Stores image paths: [master.png, master_1.png...]
-    let metaData = [];   // Stores time info: ["10:00 PM", "9:50 PM"...]
-    let currentIdx = 0;  // 0 = Oldest, 9 = Newest (Reverse logic for smoother loop)
-    let overlay = null;
-    let timer = null;
+    let frames = [];
+    let currentIndex = 9; // Start at the oldest frame to loop forward
     let isPlaying = true;
+    let radarLayer = null;
 
-    // Example of how to correctly load and anchor the radar frame
-async function loadRadarFrame(index) {
-    const metaRes = await fetch(`data/metadata_${index}.json`);
-    const metadata = await metaRes.json();
-    
-    // metadata.bounds is [[actual_bot, actual_left], [actual_top, actual_right]]
-    const imageBounds = metadata.bounds; 
-    const imageUrl = `data/master_${index === 0 ? '' : index}.png`;
-
-    // If you have an existing overlay, remove it or update it
-    if (window.radarLayer) {
-        window.map.removeLayer(window.radarLayer);
-    }
-
-    // Create the overlay with the EXACT bounds from Python
-    window.radarLayer = L.imageOverlay(imageUrl, imageBounds, {
-        opacity: 0.8,
-        interactive: false
-    }).addTo(window.map);
-
-    // Update your UI timestamp
-    document.getElementById('timestamp').innerText = metadata.time;
-}
-            
-            updateDisplay(0);
-            startLoop();
-
-        } catch (e) {
-            console.error(e);
-            document.getElementById('clock').innerText = "RADAR OFFLINE";
-            document.getElementById('clock').style.color = "red";
+    async function preloadFrames() {
+        for (let i = 0; i < 10; i++) {
+            try {
+                const res = await fetch(`data/metadata_${i}.json`);
+                const meta = await res.json();
+                const imgUrl = `data/master${i === 0 ? '' : '_' + i}.png`;
+                
+                frames[i] = {
+                    url: imgUrl,
+                    bounds: meta.bounds, // Format: [[South, West], [North, East]]
+                    time: meta.time
+                };
+            } catch (e) { console.error("Missing frame", i); }
         }
+        // Start the loop
+        updateDisplay();
     }
 
-    function updateDisplay(index) {
-        currentIdx = index;
-        overlay.setUrl(frames[index]); // Leaflet handles the image swap
-        document.getElementById('scrubber').value = index;
-        document.getElementById('clock').innerText = metaData[index].time;
+    function updateDisplay() {
+        const frame = frames[currentIndex];
+        if (!frame) return;
+
+        // --- THE FIX ---
+        // Instead of updating the URL of an existing layer, we create a new 
+        // imageOverlay with the EXACT bounds provided by the metadata.
+        if (radarLayer) map.removeLayer(radarLayer);
+        
+        radarLayer = L.imageOverlay(frame.url, frame.bounds, {
+            opacity: 0.85,
+            interactive: false,
+            // Optimization: 'nearest' prevents the browser from blurring 
+            // the 0.01 degree pixels during zoom.
+            className: 'radar-pixel-layer' 
+        }).addTo(map);
+
+        document.getElementById('timestamp').innerText = frame.time;
     }
 
-    function startLoop() {
-        isPlaying = true;
-        document.getElementById('play-btn').innerText = "⏸";
-        timer = setInterval(() => {
-            let next = (currentIdx + 1) % TOTAL_FRAMES;
-            updateDisplay(next);
-        }, 600);
+    function nextFrame() {
+        currentIndex = currentIndex === 0 ? 9 : currentIndex - 1;
+        updateDisplay();
     }
 
-    function pauseLoop() {
-        isPlaying = false;
-        document.getElementById('play-btn').innerText = "▶";
-        clearInterval(timer);
+    function prevFrame() {
+        currentIndex = currentIndex === 9 ? 0 : currentIndex + 1;
+        updateDisplay();
     }
 
-    // Toggle Play/Pause
-    document.getElementById('play-btn').onclick = () => isPlaying ? pauseLoop() : startLoop();
+    function togglePlay() {
+        isPlaying = !isPlaying;
+        document.getElementById('playPause').innerText = isPlaying ? "Pause" : "Play";
+    }
 
-    // Scrubber Interaction
-    document.getElementById('scrubber').oninput = (e) => {
-        pauseLoop();
-        updateDisplay(parseInt(e.target.value));
-    };
+    // Main animation loop
+    setInterval(() => {
+        if (isPlaying) nextFrame();
+    }, 800);
 
-    init();
+    preloadFrames();
 </script>
+
 </body>
 </html>
