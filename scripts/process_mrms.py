@@ -15,7 +15,7 @@ import pytz
 LAT_TOP, LAT_BOT = 50.0, 20.0
 LON_LEFT, LON_RIGHT = -130.0, -60.0
 OUTPUT_DIR = "public/data"
-NUM_FRAMES = 15
+NUM_FRAMES = 10
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 BUCKET_URL = "https://noaa-mrms-pds.s3.amazonaws.com"
@@ -67,32 +67,31 @@ def process_frame(index, rate_key, flag_keys):
     if not flag_key: return
 
     try:
-        download_and_extract(rate_key, f"rate_{index}.grib2")
-        download_and_extract(flag_key, f"flag_{index}.grib2")
+        tmp_r, tmp_f = f"rate_{index}.grib2", f"flag_{index}.grib2"
+        download_and_extract(rate_key, tmp_r)
+        download_and_extract(flag_key, tmp_f)
         
-        ds_rate = xr.open_dataset(f"rate_{index}.grib2", engine="cfgrib")
-        ds_flag = xr.open_dataset(f"flag_{index}.grib2", engine="cfgrib")
+        ds_rate = xr.open_dataset(tmp_r, engine="cfgrib")
+        ds_flag = xr.open_dataset(tmp_f, engine="cfgrib")
         
-        # 1. Normalize Longitude and SORT coordinates
+        # 1. Coordinate Normalization
         for ds in [ds_rate, ds_flag]:
             ds.coords['longitude'] = ((ds.longitude + 180) % 360) - 180
         
         ds_rate = ds_rate.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
         ds_flag = ds_flag.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
 
-        # 2. Slice to exact bounds
+        # 2. Precise Slicing
         rate = ds_rate[list(ds_rate.data_vars)[0]].sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
         flag = ds_flag[list(ds_flag.data_vars)[0]].sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
 
-        # --- COORDINATE CALCULATION FOR ALIGNMENT ---
-        # MRMS is 0.01 deg resolution. We need the edges of the pixels, not the centers.
+        # --- FIX: CALCUALTE PIXEL EDGES TO PREVENT NORTH/WEST DRIFT ---
+        # MRMS resolution is 0.01. The 'actual' boundary is half a pixel beyond the center coordinate.
         res = 0.01
-        half = res / 2.0
-        
-        actual_lat_max = float(rate.latitude.max()) + half
-        actual_lat_min = float(rate.latitude.min()) - half
-        actual_lon_max = float(rate.longitude.max()) + half
-        actual_lon_min = float(rate.longitude.min()) - half
+        actual_top = float(rate.latitude.max()) + (res / 2)
+        actual_bot = float(rate.latitude.min()) - (res / 2)
+        actual_left = float(rate.longitude.min()) - (res / 2)
+        actual_right = float(rate.longitude.max()) - (res / 2)
 
         # 3. Create Masks
         rain = rate.where(flag.isin([1, 2, 5, 7, 8]))
@@ -101,12 +100,13 @@ def process_frame(index, rate_key, flag_keys):
 
         # --- PIXEL-PERFECT PLOTTING ---
         height_px, width_px = rain.shape
+        # Force exact pixel dimensions
         fig = plt.figure(figsize=(width_px/100, height_px/100), dpi=100)
         ax = fig.add_axes([0, 0, 1, 1], frameon=False)
         ax.set_axis_off()
 
-        # The extent represents the actual pixel boundaries
-        extent = [actual_lon_min, actual_lon_max, actual_lat_min, actual_lat_max]
+        # Extent must match the 'Actual' calculated edges
+        extent = [actual_left, actual_right, actual_bot, actual_top]
 
         if np.nanmax(rain.values) > 0.1:
             ax.imshow(rain.values, cmap=get_colormap('rain'), vmin=0.1, vmax=15, extent=extent, origin='upper', interpolation='nearest')
@@ -117,16 +117,22 @@ def process_frame(index, rate_key, flag_keys):
 
         img_name = "master.png" if index == 0 else f"master_{index}.png"
         
-        # Save with absolute zero margins
+        # Save without any clipping or tight-box adjustments
         plt.savefig(os.path.join(OUTPUT_DIR, img_name), transparent=True, pad_inches=0)
         plt.close()
 
-        # 4. Save Metadata with EXACT boundaries
-        utc_dt = datetime.fromtimestamp(ds_rate.time.values.astype(int) * 1e-9, tz=timezone.utc)
+        # --- FIX: ROBUST TIMESTAMP EXTRACTION ---
+        # Try 'valid_time' first (standard for cfgrib), fallback to 'time'
+        raw_time = ds_rate.get('valid_time', ds_rate.get('time')).values
+        if isinstance(raw_time, np.ndarray): raw_time = raw_time[0]
+        
+        # Convert numpy datetime64 to python datetime
+        utc_dt = datetime.fromtimestamp(raw_time.astype('datetime64[s]').astype(int), tz=timezone.utc)
         et_dt = utc_dt.astimezone(pytz.timezone('US/Eastern'))
         
+        # --- FIX: SYNC BOUNDS WITH IMAGE EDGES ---
         meta = {
-            "bounds": [[actual_lat_min, actual_lon_min], [actual_lat_max, actual_lon_max]],
+            "bounds": [[actual_bot, actual_left], [actual_top, actual_right]],
             "time": et_dt.strftime("%I:%M %p ET"),
             "vmax_applied": 15
         }
@@ -134,12 +140,12 @@ def process_frame(index, rate_key, flag_keys):
         with open(os.path.join(OUTPUT_DIR, f"metadata_{index}.json"), "w") as f:
             json.dump(meta, f)
             
-        print(f"Processed {img_name} - Time: {meta['time']} - Bounds: {meta['bounds']}")
+        print(f"Processed {img_name} - Time: {meta['time']} - Bounds Fixed.")
 
     except Exception as e:
         print(f"Error on frame {index}: {e}")
     finally:
-        for f in [f"rate_{index}.grib2", f"flag_{index}.grib2"]:
+        for f in [tmp_r, tmp_f]:
             if os.path.exists(f): os.remove(f)
 
 if __name__ == "__main__":
@@ -152,6 +158,8 @@ if __name__ == "__main__":
         flag_keys = get_s3_keys(date_str, FLAG_PREFIX)
         
         if len(rate_keys) >= NUM_FRAMES:
+            # Get latest frames in chronological order for the loop, 
+            # but index 0 remains the absolute latest.
             latest = sorted(rate_keys)[-NUM_FRAMES:][::-1]
             for idx, r_key in enumerate(latest):
                 process_frame(idx, r_key, flag_keys)
