@@ -6,43 +6,41 @@ import shutil
 import xml.etree.ElementTree as ET
 import numpy as np
 import xarray as xr
-import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
+from PIL import Image
 from datetime import datetime, timezone, timedelta
 import pytz
 
 # --- CONFIGURATION ---
-# Using precise 0.01 degree intervals ensures the MRMS grid aligns perfectly.
+# We use integers/exact decimals to prevent floating point drift
 LAT_TOP, LAT_BOT = 50.0, 20.0
 LON_LEFT, LON_RIGHT = -130.0, -60.0
 OUTPUT_DIR = "public/data"
 NUM_FRAMES = 10
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-BUCKET_URL = "https://noaa-mrms-pds.s3.amazonaws.com"
-FLAG_PREFIX = "CONUS/PrecipFlag_00.00"
+# --- COLOR DEFINITIONS (RGBA) ---
+# Format: (R, G, B, A)
+RAIN_COLORS = [
+    (0, 251, 144, 255), (0, 187, 0, 255), (0, 136, 0, 255),
+    (255, 255, 0, 255), (255, 145, 0, 255), (255, 0, 0, 255),
+    (210, 0, 0, 255), (145, 0, 0, 255)
+]
 
-def discover_rate_prefix():
-    url = f"{BUCKET_URL}/?list-type=2&prefix=CONUS/&delimiter=/"
-    try:
-        r = requests.get(url, timeout=10)
-        root = ET.fromstring(r.content)
-        for element in root.iter():
-            if element.tag.endswith('Prefix'):
-                p = element.text
-                if "PrecipRate" in p or "SurfacePrecip" in p:
-                    return p.rstrip("/")
-    except: pass
-    return "CONUS/SurfacePrecipRate_00.00"
+def get_color_for_value(val, vmax=15.0):
+    if val < 0.1 or np.isnan(val): return (0, 0, 0, 0)
+    idx = int((val / vmax) * (len(RAIN_COLORS) - 1))
+    idx = min(max(idx, 0), len(RAIN_COLORS) - 1)
+    return RAIN_COLORS[idx]
+
+# --- S3 HELPERS ---
+BUCKET_URL = "https://noaa-mrms-pds.s3.amazonaws.com"
 
 def get_s3_keys(date_str, prefix):
     url = f"{BUCKET_URL}/?list-type=2&prefix={prefix}/{date_str}/"
-    try:
-        r = requests.get(url, timeout=10)
-        if r.status_code != 200: return []
-        root = ET.fromstring(r.content)
-        return sorted([e.text for e in root.iter() if e.tag.endswith('Key') and e.text.endswith('.grib2.gz')])
-    except: return []
+    r = requests.get(url, timeout=10)
+    if r.status_code != 200: return []
+    root = ET.fromstring(r.content)
+    return sorted([e.text for e in root.iter() if e.tag.endswith('Key') and e.text.endswith('.grib2.gz')])
 
 def download_and_extract(key, filename):
     url = f"{BUCKET_URL}/{key}"
@@ -53,102 +51,77 @@ def download_and_extract(key, filename):
         shutil.copyfileobj(f_in, f_out)
     os.remove(filename + ".gz")
 
-def get_colormap(p_type):
-    if p_type == 'snow':
-        return ListedColormap(['#00ffff', '#80ffff', '#ffffff', '#adc5ff', '#5a82ff'])
-    elif p_type == 'ice':
-        return ListedColormap(['#ff00ff', '#d100d1', '#910091', '#4b0082'])
-    else: # Rain (Standard NWS-ish Scale)
-        return ListedColormap(['#00fb90', '#00bb00', '#008800', '#ffff00', '#ff9100', '#ff0000', '#d20000', '#910000'])
-
-def process_frame(index, rate_key, flag_keys):
-    timestamp_str = rate_key.split('_')[-1].split('.')[0]
-    flag_key = next((k for k in flag_keys if timestamp_str in k), None)
-    
-    if not flag_key: return
-
+def process_frame(index, rate_key):
     try:
-        download_and_extract(rate_key, "rate.grib2")
-        download_and_extract(flag_key, "flag.grib2")
+        download_and_extract(rate_key, f"rate_{index}.grib2")
+        ds = xr.open_dataset(f"rate_{index}.grib2", engine="cfgrib")
         
-        # Open with explicit settings
-        ds_rate = xr.open_dataset("rate.grib2", engine="cfgrib")
-        ds_flag = xr.open_dataset("flag.grib2", engine="cfgrib")
+        # 1. Normalize Longitude and Sort
+        ds.coords['longitude'] = ((ds.longitude + 180) % 360) - 180
+        # CRITICAL: Force North-to-South and West-to-East
+        ds = ds.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
         
-        # 1. Normalize Longitude and SORT coordinates
-        # This ensures the array indexing [0,0] is definitely the top-left (North-West)
-        for ds in [ds_rate, ds_flag]:
-            ds.coords['longitude'] = ((ds.longitude + 180) % 360) - 180
+        # 2. Slice strictly
+        data_var = list(ds.data_vars)[0]
+        subset = ds[data_var].sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
         
-        ds_rate = ds_rate.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
-        ds_flag = ds_flag.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
+        # 3. Create Image Array (Height, Width, RGBA)
+        raw_values = subset.values
+        height, width = raw_values.shape
+        rgba_data = np.zeros((height, width, 4), dtype=np.uint8)
 
-        # 2. Slice to exact bounds
-        rate = ds_rate[list(ds_rate.data_vars)[0]].sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
-        flag = ds_flag[list(ds_flag.data_vars)[0]].sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
+        # Apply the Rain scale (vmax=15)
+        # Vectorized coloring for speed
+        vmax = 15.0
+        mask = (raw_values >= 0.1) & (~np.isnan(raw_values))
+        indices = ((raw_values[mask] / vmax) * (len(RAIN_COLORS) - 1)).astype(int)
+        indices = np.clip(indices, 0, len(RAIN_COLORS) - 1)
+        
+        # Fill RGBA
+        colors_np = np.array(RAIN_COLORS, dtype=np.uint8)
+        rgba_data[mask] = colors_np[indices]
 
-        # 3. Create Masks
-        rain = rate.where(flag.isin([1, 2, 5, 7, 8]))
-        snow = rate.where(flag == 3)
-        ice  = rate.where(flag.isin([4, 6, 10]))
-
-        # --- PIXEL-PERFECT PLOTTING ---
-        # Calculate aspect ratio to avoid internal Matplotlib stretching
-        height_px, width_px = rain.shape
-        fig = plt.figure(figsize=(width_px/100, height_px/100), dpi=100)
-        ax = fig.add_axes([0, 0, 1, 1], frameon=False)
-        ax.set_axis_off()
-
-        # The extent must match the sliced coordinates exactly
-        extent = [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP]
-
-        # Use origin='upper' because we sorted latitude as Descending (Top = Max Lat)
-        if np.nanmax(rain.values) > 0.1:
-            ax.imshow(rain.values, cmap=get_colormap('rain'), vmin=0.1, vmax=15, extent=extent, origin='upper', interpolation='nearest')
-        if np.nanmax(snow.values) > 0.1:
-            ax.imshow(snow.values, cmap=get_colormap('snow'), vmin=0.1, vmax=5, extent=extent, origin='upper', interpolation='nearest')
-        if np.nanmax(ice.values) > 0.1:
-            ax.imshow(ice.values, cmap=get_colormap('ice'), vmin=0.1, vmax=5, extent=extent, origin='upper', interpolation='nearest')
-
+        # 4. Save via PIL (Ensures No Margins)
+        img = Image.fromarray(rgba_data, 'RGBA')
         img_name = "master.png" if index == 0 else f"master_{index}.png"
-        
-        # CRITICAL: Do NOT use bbox_inches='tight'. It re-crops the image and breaks the alignment.
-        plt.savefig(os.path.join(OUTPUT_DIR, img_name), transparent=True, pad_inches=0)
-        plt.close()
+        img.save(os.path.join(OUTPUT_DIR, img_name))
 
-        # 4. Save Metadata
-        utc_dt = datetime.fromtimestamp(ds_rate.time.values.astype(int) * 1e-9, tz=timezone.utc)
+        # 5. Metadata (Use the EXACT coordinates from the data subset)
+        # This eliminates the "Floating" issue by telling Leaflet exactly where the pixels end
+        actual_bounds = [
+            [float(subset.latitude.min()), float(subset.longitude.min())], # South West
+            [float(subset.latitude.max()), float(subset.longitude.max())]  # North East
+        ]
+        
+        utc_dt = datetime.fromtimestamp(ds.time.values.astype(int) * 1e-9, tz=timezone.utc)
         et_dt = utc_dt.astimezone(pytz.timezone('US/Eastern'))
         
         meta = {
-            "bounds": [[LAT_BOT, LON_LEFT], [LAT_TOP, LON_RIGHT]],
-            "time": et_dt.strftime("%I:%M %p ET"),
-            "vmax_applied": 15
+            "bounds": actual_bounds,
+            "time": et_dt.strftime("%I:%M %p ET")
         }
         
         with open(os.path.join(OUTPUT_DIR, f"metadata_{index}.json"), "w") as f:
             json.dump(meta, f)
             
-        print(f"Processed {img_name} - Time: {meta['time']}")
+        print(f"Frame {index} generated with vmax=15 and strict bounds.")
 
     except Exception as e:
-        print(f"Error on frame {index}: {e}")
+        print(f"Error: {e}")
     finally:
-        for f in ["rate.grib2", "flag.grib2"]:
-            if os.path.exists(f): os.remove(f)
+        f_path = f"rate_{index}.grib2"
+        if os.path.exists(f_path): os.remove(f_path)
 
 if __name__ == "__main__":
-    RATE_PREFIX = discover_rate_prefix()
+    # Note: SurfacePrecipRate_00.00 is the most common key
+    PREFIX = "CONUS/SurfacePrecipRate_00.00"
     now_utc = datetime.now(timezone.utc)
     
-    # Try today's folder, then yesterday's if it's early morning
     for d in range(2):
         date_str = (now_utc - timedelta(days=d)).strftime("%Y%m%d")
-        rate_keys = get_s3_keys(date_str, RATE_PREFIX)
-        flag_keys = get_s3_keys(date_str, FLAG_PREFIX)
-        
-        if len(rate_keys) >= NUM_FRAMES:
-            latest = sorted(rate_keys)[-NUM_FRAMES:][::-1]
-            for idx, r_key in enumerate(latest):
-                process_frame(idx, r_key, flag_keys)
+        keys = get_s3_keys(date_str, PREFIX)
+        if len(keys) >= NUM_FRAMES:
+            latest = sorted(keys)[-NUM_FRAMES:][::-1]
+            for idx, k in enumerate(latest):
+                process_frame(idx, k)
             break
