@@ -15,7 +15,7 @@ import pytz
 LAT_TOP, LAT_BOT = 50.0, 20.0
 LON_LEFT, LON_RIGHT = -130.0, -60.0
 OUTPUT_DIR = "public/data"
-NUM_FRAMES = 10
+NUM_FRAMES = 15
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 BUCKET_URL = "https://noaa-mrms-pds.s3.amazonaws.com"
