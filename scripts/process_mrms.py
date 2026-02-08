@@ -105,7 +105,7 @@ def process_frame(index, rate_key, flag_keys):
         # --- HIGH RES PLOTTING ---
         height_px, width_px = rain.shape
         # Force high DPI (300) to stop blurriness
-        fig = plt.figure(figsize=(width_px/100, height_px/100), dpi=300)
+        fig = plt.figure(figsize=(width_px/100, height_px/100), dpi=800)
         ax = fig.add_axes([0, 0, 1, 1], frameon=False)
         ax.set_axis_off()
 
