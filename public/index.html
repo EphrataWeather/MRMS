@@ -114,34 +114,29 @@
     let timer = null;
     let isPlaying = true;
 
-    async function init() {
-        try {
-            // Load Metadata for ALL frames to get their specific times
-            // We iterate 0 to 9, where 0 is newest. 
-            // BUT for the animation loop, we want 0 to be Oldest.
-            // So we will fetch them, then REVERSE the arrays.
-            
-            const rawFrames = [];
-            const rawMeta = [];
+    // Example of how to correctly load and anchor the radar frame
+async function loadRadarFrame(index) {
+    const metaRes = await fetch(`data/metadata_${index}.json`);
+    const metadata = await metaRes.json();
+    
+    // metadata.bounds is [[actual_bot, actual_left], [actual_top, actual_right]]
+    const imageBounds = metadata.bounds; 
+    const imageUrl = `data/master_${index === 0 ? '' : index}.png`;
 
-            for (let i = 0; i < TOTAL_FRAMES; i++) {
-                const fName = i === 0 ? "master.png" : `master_${i}.png`;
-                const mName = `metadata_${i}.json`; // Using new per-frame metadata
-                
-                rawFrames.push(`data/${fName}`);
-                
-                // Fetch the JSON for this specific frame
-                const res = await fetch(`data/${mName}`);
-                const data = await res.json();
-                rawMeta.push(data);
-            }
+    // If you have an existing overlay, remove it or update it
+    if (window.radarLayer) {
+        window.map.removeLayer(window.radarLayer);
+    }
 
-            // Reverse so Index 0 is the OLDEST time (start of loop)
-            frames = rawFrames.reverse();
-            metaData = rawMeta.reverse();
+    // Create the overlay with the EXACT bounds from Python
+    window.radarLayer = L.imageOverlay(imageUrl, imageBounds, {
+        opacity: 0.8,
+        interactive: false
+    }).addTo(window.map);
 
-            // Initialize Overlay with the oldest frame (Index 0)
-            overlay = L.imageOverlay(frames[0], metaData[0].bounds, { pane: 'radar', opacity: 0.8 }).addTo(map);
+    // Update your UI timestamp
+    document.getElementById('timestamp').innerText = metadata.time;
+}
             
             updateDisplay(0);
             startLoop();
