@@ -106,7 +106,7 @@
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'popupPane', zIndex: 600 }).addTo(map);
 
     // 2. STATE
-    const TOTAL_FRAMES = 10;
+    const TOTAL_FRAMES = 15;
     let frames = [];     // Stores image paths: [master.png, master_1.png...]
     let metaData = [];   // Stores time info: ["10:00 PM", "9:50 PM"...]
     let currentIdx = 0;  // 0 = Oldest, 9 = Newest (Reverse logic for smoother loop)
