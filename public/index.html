@@ -17,6 +17,13 @@
         .time-display { font-weight: bold; font-size: 1.2rem; min-width: 120px; text-align: center; }
         .controls button { background: #444; border: none; color: white; padding: 8px 15px; cursor: pointer; border-radius: 5px; }
         .controls button:hover { background: #666; }
+        /* Add this to your <style> block */
+        .leaflet-image-layer {
+    /* Prevents browser-side blurring */
+    image-rendering: pixelated; 
+    image-rendering: crisp-edges;
+    image-rendering: -moz-crisp-edges;
+}
     </style>
 </head>
 <body>
@@ -29,11 +36,13 @@
         <button onclick="nextFrame()">Next</button>
     </div>
 </div>
+    
 
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+    
     const map = L.map('map', {
         center: [38.0, -95.0],
         zoom: 5,
