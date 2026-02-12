@@ -12,14 +12,13 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from datetime import datetime, timezone, timedelta
 import pytz
-import time
 import gc
 
 # --- CONFIGURATION ---
-LAT_TOP, LAT_BOT = 50.0, 20.0
+LAT_TOP, LAT_BOT = 50.0, 24.0 # Mercator distorts heavily < 20N, so 24N is safer for CONUS
 LON_LEFT, LON_RIGHT = -130.0, -60.0
 OUTPUT_DIR = "public/data"
-NUM_FRAMES = 5  # Reduced to 5 to prevent timeouts; increase if stable
+NUM_FRAMES = 5
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 BUCKET_URL = "https://noaa-mrms-pds.s3.amazonaws.com"
@@ -39,6 +38,16 @@ def get_colormap(p_type):
         return ListedColormap(['#ff00ff', '#d100d1', '#910091', '#4b0082'])
     else: # Rain
         return ListedColormap(['#00fb90', '#00bb00', '#008800', '#ffff00', '#ff9100', '#ff0000', '#d20000', '#910000'])
+
+# --- MERCATOR MATH ---
+def lat_to_mercator_y(lat):
+    """Convert latitude to Mercator Y (normalized units)"""
+    lat_rad = np.radians(lat)
+    return np.log(np.tan(np.pi / 4 + lat_rad / 2))
+
+def mercator_y_to_lat(y):
+    """Convert Mercator Y back to latitude"""
+    return np.degrees(2 * np.arctan(np.exp(y)) - np.pi / 2)
 
 def discover_rate_prefix():
     print("Finding current Rate prefix...")
@@ -67,12 +76,10 @@ def download_and_extract(key, filename):
     url = f"{BUCKET_URL}/{key}"
     print(f"  Downloading {key}...", end="", flush=True)
     try:
-        # 30s timeout to prevent hanging
         with session.get(url, stream=True, timeout=30) as r:
             r.raise_for_status()
             with open(filename + ".gz", "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
-        
         with gzip.open(filename + ".gz", "rb") as f_in, open(filename, "wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
         os.remove(filename + ".gz")
@@ -80,59 +87,74 @@ def download_and_extract(key, filename):
         return True
     except Exception as e:
         print(f" FAILED: {e}")
-        if os.path.exists(filename + ".gz"): os.remove(filename + ".gz")
         return False
 
 def process_frame(index, rate_key, flag_keys):
-    # Match YYYYMMDD-HHMM (First 13 chars)
     timestamp_part = rate_key.split('_')[-1]
     time_prefix = timestamp_part[:13]
     flag_key = next((k for k in flag_keys if time_prefix in k), None)
-    
     if not flag_key: return
 
-    tmp_r = f"rate_{index}.grib2"
-    tmp_f = f"flag_{index}.grib2"
+    tmp_r, tmp_f = f"rate_{index}.grib2", f"flag_{index}.grib2"
 
     try:
         if not download_and_extract(rate_key, tmp_r): return
         if not download_and_extract(flag_key, tmp_f): return
         
-        # SPEED FIX: backend_kwargs={'indexpath': ''} prevents creating slow .idx files
+        # Load Data
         ds_rate = xr.open_dataset(tmp_r, engine="cfgrib", backend_kwargs={'indexpath': ''})
         ds_flag = xr.open_dataset(tmp_f, engine="cfgrib", backend_kwargs={'indexpath': ''})
         
-        # 1. Normalize Coordinates
+        # Normalize Longitude
         for ds in [ds_rate, ds_flag]:
             ds.coords['longitude'] = ((ds.longitude + 180) % 360) - 180
             
-        ds_rate = ds_rate.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
-        ds_flag = ds_flag.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
+        # Initial Rough Slice (to save memory before warping)
+        # We slice a bit wider than needed to avoid edge artifacts during interpolation
+        ds_rate = ds_rate.sel(latitude=slice(LAT_TOP+1, LAT_BOT-1), longitude=slice(LON_LEFT, LON_RIGHT))
+        ds_flag = ds_flag.sel(latitude=slice(LAT_TOP+1, LAT_BOT-1), longitude=slice(LON_LEFT, LON_RIGHT))
+
+        # --- THE FIX: REPROJECT TO WEB MERCATOR ---
+        # 1. Calculate the Mercator Y bounds for our desired box
+        merc_top = lat_to_mercator_y(LAT_TOP)
+        merc_bot = lat_to_mercator_y(LAT_BOT)
         
-        # 2. Slice
-        rate = ds_rate[list(ds_rate.data_vars)[0]].sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
-        flag = ds_flag[list(ds_flag.data_vars)[0]].sel(latitude=slice(LAT_TOP, LAT_BOT), longitude=slice(LON_LEFT, LON_RIGHT))
+        # 2. Create a new linearly spaced Y-axis in MERCATOR space
+        # This simulates the "stretching" Leaflet expects
+        height_pixels = 800 # Arbitrary high resolution height
+        new_merc_y = np.linspace(merc_top, merc_bot, height_pixels)
+        
+        # 3. Convert these Mercator Y steps back to True Latitude
+        # These are the unevenly spaced latitudes we need to sample from the original data
+        target_lats = mercator_y_to_lat(new_merc_y)
+        
+        # 4. Interpolate the data onto this new grid
+        # We use nearest neighbor to preserve the crisp radar look (no blurring)
+        rate_merc = ds_rate.interp(latitude=xr.DataArray(target_lats, dims="y"), method="nearest")
+        flag_merc = ds_flag.interp(latitude=xr.DataArray(target_lats, dims="y"), method="nearest")
+        
+        # Extract the variable
+        rate = rate_merc[list(rate_merc.data_vars)[0]]
+        flag = flag_merc[list(flag_merc.data_vars)[0]]
 
-        # --- ALIGNMENT FIX (Center vs Edge) ---
-        res = 0.01
-        north = float(rate.latitude.max()) + (res / 2)
-        south = float(rate.latitude.min()) - (res / 2)
-        west  = float(rate.longitude.min()) - (res / 2)
-        east  = float(rate.longitude.max()) + (res / 2)
-        extent = [west, east, south, north]
+        # 5. Calculate Exact Bounds for Leaflet
+        # Since we forced the interpolation to LAT_TOP/LAT_BOT exactly:
+        extent = [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP]
 
-        # 3. Mask & Plot
+        # Apply Masks
         rain = rate.where(flag.isin([1, 2, 5, 7, 8]))
         snow = rate.where(flag == 3)
         ice  = rate.where(flag.isin([4, 6, 10]))
 
-        height_px, width_px = rain.shape
-        # High DPI + No Interpolation for crisp radar
-        fig = plt.figure(figsize=(width_px/100, height_px/100), dpi=300)
+        # Plotting
+        height, width = rain.shape
+        # Use simple aspect ratio since we manually warped the Y-axis
+        fig = plt.figure(figsize=(width/100, height/100), dpi=100)
         ax = fig.add_axes([0, 0, 1, 1], frameon=False)
         ax.set_axis_off()
 
-        plot_args = dict(extent=extent, origin='upper', interpolation='none')
+        # 'aspect="auto"' allows the pixels to fill the warped grid
+        plot_args = dict(extent=extent, origin='upper', interpolation='none', aspect='auto')
         
         if np.nanmax(rain.values) > 0.1:
             ax.imshow(rain.values, cmap=get_colormap('rain'), vmin=0.1, vmax=15, **plot_args)
@@ -145,7 +167,7 @@ def process_frame(index, rate_key, flag_keys):
         plt.savefig(os.path.join(OUTPUT_DIR, img_name), transparent=True, pad_inches=0)
         plt.close()
 
-        # 4. Metadata
+        # Metadata
         try:
             raw_time = ds_rate.valid_time.values
             if isinstance(raw_time, np.ndarray): raw_time = raw_time.flat[0]
@@ -155,20 +177,20 @@ def process_frame(index, rate_key, flag_keys):
 
         et_dt = utc_dt.astimezone(pytz.timezone('US/Eastern'))
         
-        meta = { "bounds": [[south, west], [north, east]], "time": et_dt.strftime("%I:%M %p ET") }
+        # Leaflet bounds are now exactly what we requested
+        meta = { "bounds": [[LAT_BOT, LON_LEFT], [LAT_TOP, LON_RIGHT]], "time": et_dt.strftime("%I:%M %p ET") }
         
         with open(os.path.join(OUTPUT_DIR, f"metadata_{index}.json"), "w") as f:
             json.dump(meta, f)
             
-        print(f"  Processed Frame {index}: {meta['time']}")
-
-        # Explicit cleanup to prevent memory leaks/timeouts
-        ds_rate.close()
-        ds_flag.close()
-        gc.collect()
+        print(f"  Processed {index}: {meta['time']} (Mercator Warped)")
+        
+        ds_rate.close(); ds_flag.close(); gc.collect()
 
     except Exception as e:
         print(f"  Error on frame {index}: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         for f in [tmp_r, tmp_f]:
             if os.path.exists(f): os.remove(f)
@@ -177,22 +199,17 @@ if __name__ == "__main__":
     RATE_PREFIX = discover_rate_prefix()
     now_utc = datetime.now(timezone.utc)
     
-    # Try current day first
     processed_count = 0
     for d in range(2):
         date_str = (now_utc - timedelta(days=d)).strftime("%Y%m%d")
         rate_keys = get_s3_keys(date_str, RATE_PREFIX)
         flag_keys = get_s3_keys(date_str, FLAG_PREFIX)
-        
         if not rate_keys: continue
             
-        latest_rate = sorted(rate_keys)[::-1]
-        target_frames = latest_rate[:NUM_FRAMES]
-        
-        print(f"Found {len(latest_rate)} files. Processing latest {len(target_frames)}...")
+        target_frames = sorted(rate_keys)[::-1][:NUM_FRAMES]
+        print(f"Processing latest {len(target_frames)} frames...")
         
         for idx, r_key in enumerate(target_frames):
             process_frame(idx, r_key, flag_keys)
             processed_count += 1
-            
         if processed_count > 0: break
