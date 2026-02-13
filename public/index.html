@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>MRMS Data Viewer | Live</title>
+    <title>Precision MRMS HD | Live</title>
     
     <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
     <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
@@ -16,19 +16,18 @@
         body { margin: 0; padding: 0; background: #010409; color: white; overflow: hidden; font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
 
-        /* --- RADAR LEGEND --- */
-        .legend {
+        /* --- TRIPLE CATEGORY LEGEND --- */
+        .legend-container {
             position: absolute; top: 20px; left: 20px;
-            background: var(--bg); backdrop-filter: blur(10px);
+            background: var(--bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
             border: 1px solid var(--border); border-radius: 12px;
-            padding: 12px; z-index: 10; width: 45px;
-            display: flex; flex-direction: column; align-items: center; gap: 4px;
+            padding: 12px; z-index: 10; display: flex; flex-direction: column; gap: 10px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
         }
-        .legend-title { font-size: 9px; font-weight: 600; margin-bottom: 4px; color: var(--accent); }
-        .legend-scale { width: 12px; height: 180px; border-radius: 4px; background: linear-gradient(to top, 
-            #000000 0%, #00ecec 10%, #01a000 20%, #00c800 30%, #00fb00 40%, 
-            #ffff00 50%, #e7c000 60%, #ff9000 70%, #ff0000 80%, #d00000 90%, #bc0000 100%); }
-        .legend-labels { display: flex; flex-direction: column; justify-content: space-between; height: 180px; font-size: 9px; font-family: 'JetBrains Mono'; color: #aaa; }
+        .legend-group { display: flex; flex-direction: column; gap: 4px; }
+        .legend-label { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #888; }
+        .color-strip { display: flex; height: 8px; border-radius: 2px; overflow: hidden; width: 120px; border: 1px solid rgba(255,255,255,0.05); }
+        .color-block { flex: 1; height: 100%; }
 
         /* --- UI CARD --- */
         .ui-card {
@@ -57,8 +56,8 @@
         .sub-settings { display: flex; justify-content: space-between; gap: 15px; font-size: 11px; }
         .setting-group { display: flex; align-items: center; gap: 8px; flex: 1; }
 
-        /* GPS Button Styling */
-        .mapboxgl-ctrl-group { background: var(--bg) !important; border: 1px solid var(--border) !important; backdrop-filter: blur(10px); }
+        /* Mapbox GPS Icon customization */
+        .mapboxgl-ctrl-group { background: var(--bg) !important; border: 1px solid var(--border) !important; }
         .mapboxgl-ctrl-icon { filter: invert(1); }
     </style>
 </head>
@@ -66,19 +65,44 @@
 
     <div id="map"></div>
 
-    <div class="legend">
-        <div class="legend-title">DBZ</div>
-        <div style="display: flex; gap: 8px;">
-            <div class="legend-scale"></div>
-            <div class="legend-labels">
-                <span>75</span><span>60</span><span>45</span><span>30</span><span>15</span><span>5</span>
+    <div class="legend-container">
+        <div class="legend-group">
+            <span class="legend-label">Rain</span>
+            <div class="color-strip">
+                <div class="color-block" style="background:#00fb90"></div>
+                <div class="color-block" style="background:#00bb00"></div>
+                <div class="color-block" style="background:#008800"></div>
+                <div class="color-block" style="background:#ffff00"></div>
+                <div class="color-block" style="background:#ff9100"></div>
+                <div class="color-block" style="background:#ff0000"></div>
+                <div class="color-block" style="background:#d20000"></div>
+                <div class="color-block" style="background:#910000"></div>
+            </div>
+        </div>
+        <div class="legend-group">
+            <span class="legend-label">Mix</span>
+            <div class="color-strip">
+                <div class="color-block" style="background:#ff00ff"></div>
+                <div class="color-block" style="background:#d100d1"></div>
+                <div class="color-block" style="background:#910091"></div>
+                <div class="color-block" style="background:#4b0082"></div>
+            </div>
+        </div>
+        <div class="legend-group">
+            <span class="legend-label">Snow</span>
+            <div class="color-strip">
+                <div class="color-block" style="background:#00ffff"></div>
+                <div class="color-block" style="background:#80ffff"></div>
+                <div class="color-block" style="background:#ffffff"></div>
+                <div class="color-block" style="background:#adc5ff"></div>
+                <div class="color-block" style="background:#5a82ff"></div>
             </div>
         </div>
     </div>
 
     <div class="ui-card">
         <div class="header">
-            <div class="logo">MRMS • HD Precision</div>
+            <div class="logo">MRMS • Live HD</div>
             <div id="timestamp">SYNCING...</div>
         </div>
         <div class="control-grid">
@@ -105,11 +129,11 @@
             projection: 'mercator'
         });
 
-        // --- GPS FEATURE ---
+        // GPS Control
         const geolocate = new mapboxgl.GeolocateControl({
             positionOptions: { enableHighAccuracy: true },
-            trackUserLocation: true, // Shows the blue dot and follows location
-            showUserHeading: true   // Shows which way the phone is pointing
+            trackUserLocation: true,
+            showUserHeading: true
         });
         map.addControl(geolocate, 'top-right');
 
@@ -136,7 +160,7 @@
                         time: meta.time,
                         bounds: [meta.bounds[0][1], meta.bounds[0][0], meta.bounds[1][1], meta.bounds[1][0]]
                     });
-                } catch (e) { console.error("Error loading frame", i); }
+                } catch (e) { console.error("Load error frame", i); }
             }
 
             if (frames.length === 0) {
