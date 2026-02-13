@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Precision MRMS HD</title>
+    <title>MRMS Data Viewer | Live</title>
     
     <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
     <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
@@ -16,6 +16,21 @@
         body { margin: 0; padding: 0; background: #010409; color: white; overflow: hidden; font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
 
+        /* --- RADAR LEGEND --- */
+        .legend {
+            position: absolute; top: 20px; left: 20px;
+            background: var(--bg); backdrop-filter: blur(10px);
+            border: 1px solid var(--border); border-radius: 12px;
+            padding: 12px; z-index: 10; width: 45px;
+            display: flex; flex-direction: column; align-items: center; gap: 4px;
+        }
+        .legend-title { font-size: 9px; font-weight: 600; margin-bottom: 4px; color: var(--accent); }
+        .legend-scale { width: 12px; height: 180px; border-radius: 4px; background: linear-gradient(to top, 
+            #000000 0%, #00ecec 10%, #01a000 20%, #00c800 30%, #00fb00 40%, 
+            #ffff00 50%, #e7c000 60%, #ff9000 70%, #ff0000 80%, #d00000 90%, #bc0000 100%); }
+        .legend-labels { display: flex; flex-direction: column; justify-content: space-between; height: 180px; font-size: 9px; font-family: 'JetBrains Mono'; color: #aaa; }
+
+        /* --- UI CARD --- */
         .ui-card {
             position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
             width: 92%; max-width: 450px; background: var(--bg);
@@ -41,16 +56,30 @@
 
         .sub-settings { display: flex; justify-content: space-between; gap: 15px; font-size: 11px; }
         .setting-group { display: flex; align-items: center; gap: 8px; flex: 1; }
+
+        /* GPS Button Styling */
+        .mapboxgl-ctrl-group { background: var(--bg) !important; border: 1px solid var(--border) !important; backdrop-filter: blur(10px); }
+        .mapboxgl-ctrl-icon { filter: invert(1); }
     </style>
 </head>
 <body>
 
     <div id="map"></div>
 
+    <div class="legend">
+        <div class="legend-title">DBZ</div>
+        <div style="display: flex; gap: 8px;">
+            <div class="legend-scale"></div>
+            <div class="legend-labels">
+                <span>75</span><span>60</span><span>45</span><span>30</span><span>15</span><span>5</span>
+            </div>
+        </div>
+    </div>
+
     <div class="ui-card">
         <div class="header">
             <div class="logo">MRMS • HD Precision</div>
-            <div id="timestamp">LOADING 15 FRAMES...</div>
+            <div id="timestamp">SYNCING...</div>
         </div>
         <div class="control-grid">
             <button id="play-btn"><i class="fas fa-play"></i></button>
@@ -76,6 +105,14 @@
             projection: 'mercator'
         });
 
+        // --- GPS FEATURE ---
+        const geolocate = new mapboxgl.GeolocateControl({
+            positionOptions: { enableHighAccuracy: true },
+            trackUserLocation: true, // Shows the blue dot and follows location
+            showUserHeading: true   // Shows which way the phone is pointing
+        });
+        map.addControl(geolocate, 'top-right');
+
         let frames = [];
         let currentIndex = 0;
         let isPlaying = false;
@@ -85,10 +122,8 @@
             const currentPath = window.location.pathname;
             const baseDataPath = currentPath.includes('/public/') ? 'data' : 'public/data';
             
-            // Support up to 15 frames
             for (let i = 0; i < 15; i++) {
                 try {
-                    // Logic for master.png (0) vs master_i.png
                     const imgName = (i === 0) ? 'master.png' : `master_${i}.png`;
                     const metaName = (i === 0) ? 'metadata.json' : `metadata_${i}.json`;
 
@@ -109,7 +144,6 @@
                 return;
             }
 
-            // Oldest to Newest
             frames.reverse(); 
             document.getElementById('time-slider').max = frames.length - 1;
             
@@ -127,7 +161,6 @@
                 }
             }
 
-            // MOBILE OPTIMIZATION: Use ONE source and change URL instead of 15 sources
             const initialFrame = frames[frames.length - 1];
             map.addSource('radar-source', {
                 type: 'image',
@@ -159,7 +192,6 @@
             const frame = frames[currentIndex];
             if (!frame) return;
 
-            // Efficiently update the existing source
             const source = map.getSource('radar-source');
             if (source) {
                 source.updateImage({
@@ -192,7 +224,6 @@
             playTimer = setTimeout(animate, delay);
         }
 
-        // Listeners
         document.getElementById('play-btn').onclick = togglePlay;
         document.getElementById('time-slider').oninput = (e) => {
             if (isPlaying) togglePlay();
