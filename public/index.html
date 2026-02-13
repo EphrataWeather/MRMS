@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Precision MRMS | HD Radar</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Precision MRMS HD</title>
     
     <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
     <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
@@ -12,35 +12,35 @@
     <link rel="icon" href="data:,">
 
     <style>
-        :root { --bg: rgba(10, 15, 25, 0.9); --accent: #00f2ff; --border: rgba(255, 255, 255, 0.1); }
-        body { margin: 0; padding: 0; background: #010409; color: white; overflow: hidden; font-family: 'Inter', sans-serif; }
+        :root { --bg: rgba(10, 15, 25, 0.95); --accent: #00f2ff; --border: rgba(255, 255, 255, 0.1); }
+        body { margin: 0; padding: 0; background: #010409; color: white; overflow: hidden; font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
 
         .ui-card {
             position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
-            width: 90%; max-width: 480px; background: var(--bg);
-            backdrop-filter: blur(20px); border: 1px solid var(--border);
-            border-radius: 20px; padding: 20px; z-index: 10;
-            box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+            width: 92%; max-width: 450px; background: var(--bg);
+            backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border); border-radius: 20px; padding: 18px; z-index: 10;
+            box-shadow: 0 15px 45px rgba(0,0,0,0.7);
         }
 
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
-        .logo { font-size: 11px; letter-spacing: 2px; color: var(--accent); text-transform: uppercase; font-weight: 600; }
-        #timestamp { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #aaa; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .logo { font-size: 10px; letter-spacing: 2px; color: var(--accent); text-transform: uppercase; font-weight: 600; }
+        #timestamp { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #aaa; }
 
-        .control-grid { display: grid; grid-template-columns: 50px 1fr; gap: 20px; align-items: center; }
-        #play-btn { width: 50px; height: 50px; border-radius: 14px; border: none; background: var(--accent); color: #000; cursor: pointer; font-size: 18px; }
+        .control-grid { display: grid; grid-template-columns: 48px 1fr; gap: 15px; align-items: center; }
+        #play-btn { width: 48px; height: 48px; border-radius: 12px; border: none; background: var(--accent); color: #000; cursor: pointer; font-size: 18px; }
 
-        .sliders-container { display: flex; flex-direction: column; gap: 15px; }
-        input[type=range] { -webkit-appearance: none; background: transparent; width: 100%; margin: 0; }
-        input[type=range]::-webkit-slider-runnable-track { height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; }
+        .sliders-container { display: flex; flex-direction: column; gap: 12px; }
+        input[type=range] { -webkit-appearance: none; background: transparent; width: 100%; margin: 0; cursor: pointer; }
+        input[type=range]::-webkit-slider-runnable-track { height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; }
         input[type=range]::-webkit-slider-thumb {
-            -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%;
-            background: #fff; border: 2px solid var(--accent); margin-top: -6px;
+            -webkit-appearance: none; height: 18px; width: 18px; border-radius: 50%;
+            background: #fff; border: 2px solid var(--accent); margin-top: -7px;
         }
 
-        .sub-settings { display: flex; justify-content: space-between; gap: 20px; font-size: 12px; }
-        .setting-group { display: flex; align-items: center; gap: 10px; flex: 1; }
+        .sub-settings { display: flex; justify-content: space-between; gap: 15px; font-size: 11px; }
+        .setting-group { display: flex; align-items: center; gap: 8px; flex: 1; }
     </style>
 </head>
 <body>
@@ -50,15 +50,15 @@
     <div class="ui-card">
         <div class="header">
             <div class="logo">MRMS • HD Precision</div>
-            <div id="timestamp">CONNECTING...</div>
+            <div id="timestamp">LOADING 15 FRAMES...</div>
         </div>
         <div class="control-grid">
             <button id="play-btn"><i class="fas fa-play"></i></button>
             <div class="sliders-container">
-                <input type="range" id="time-slider" min="0" max="0" value="0">
+                <input type="range" id="time-slider" min="0" max="14" value="14">
                 <div class="sub-settings">
                     <div class="setting-group"><i class="fas fa-eye"></i><input type="range" id="opacity-slider" min="0" max="1" step="0.1" value="0.7"></div>
-                    <div class="setting-group"><i class="fas fa-bolt"></i><input type="range" id="speed-slider" min="1" max="10" step="1" value="6"></div>
+                    <div class="setting-group"><i class="fas fa-bolt"></i><input type="range" id="speed-slider" min="1" max="10" step="1" value="7"></div>
                 </div>
             </div>
         </div>
@@ -85,20 +85,31 @@
             const currentPath = window.location.pathname;
             const baseDataPath = currentPath.includes('/public/') ? 'data' : 'public/data';
             
-            for (let i = 0; i < 14; i++) {
+            // Support up to 15 frames
+            for (let i = 0; i < 15; i++) {
                 try {
-                    const res = await fetch(`${baseDataPath}/metadata_${i}.json?t=${Date.now()}`);
+                    // Logic for master.png (0) vs master_i.png
+                    const imgName = (i === 0) ? 'master.png' : `master_${i}.png`;
+                    const metaName = (i === 0) ? 'metadata.json' : `metadata_${i}.json`;
+
+                    const res = await fetch(`${baseDataPath}/${metaName}?t=${Date.now()}`);
                     if (!res.ok) continue;
                     const meta = await res.json();
+                    
                     frames.push({
-                        id: i,
-                        url: `${baseDataPath}/master_${i}.png?t=${Date.now()}`,
+                        url: `${baseDataPath}/${imgName}?t=${Date.now()}`,
                         time: meta.time,
                         bounds: [meta.bounds[0][1], meta.bounds[0][0], meta.bounds[1][1], meta.bounds[1][0]]
                     });
-                } catch (e) {}
+                } catch (e) { console.error("Error loading frame", i); }
             }
-            if (frames.length === 0) return;
+
+            if (frames.length === 0) {
+                document.getElementById('timestamp').innerText = "DATA NOT FOUND";
+                return;
+            }
+
+            // Oldest to Newest
             frames.reverse(); 
             document.getElementById('time-slider').max = frames.length - 1;
             
@@ -108,9 +119,6 @@
 
         function setupRadar() {
             const layers = map.getStyle().layers;
-            
-            // LOGIC: Find the absolute first layer that contains "admin" (borders) or "label" (text)
-            // This ensures we insert radar underneath ALL of them.
             let firstTopLayerId;
             for (const layer of layers) {
                 if (layer.id.includes('admin') || layer.id.includes('label') || layer.id.includes('road')) {
@@ -119,35 +127,53 @@
                 }
             }
 
-            frames.forEach((f, idx) => {
-                map.addSource(`radar-src-${idx}`, {
-                    type: 'image',
-                    url: f.url,
-                    coordinates: [[f.bounds[0], f.bounds[3]], [f.bounds[2], f.bounds[3]], [f.bounds[2], f.bounds[1]], [f.bounds[0], f.bounds[1]]]
-                });
-
-                map.addLayer({
-                    id: `radar-lyr-${idx}`,
-                    type: 'raster',
-                    source: `radar-src-${idx}`,
-                    paint: { 
-                        'raster-opacity': 0, 
-                        'raster-fade-duration': 0, // Set to 0 for instant frame switching (higher quality feel)
-                        'raster-resampling': 'nearest' // CRITICAL: Keeps radar pixels sharp, no blurring
-                    }
-                }, firstTopLayerId);
+            // MOBILE OPTIMIZATION: Use ONE source and change URL instead of 15 sources
+            const initialFrame = frames[frames.length - 1];
+            map.addSource('radar-source', {
+                type: 'image',
+                url: initialFrame.url,
+                coordinates: [
+                    [initialFrame.bounds[0], initialFrame.bounds[3]],
+                    [initialFrame.bounds[2], initialFrame.bounds[3]],
+                    [initialFrame.bounds[2], initialFrame.bounds[1]],
+                    [initialFrame.bounds[0], initialFrame.bounds[1]]
+                ]
             });
+
+            map.addLayer({
+                id: 'radar-layer',
+                type: 'raster',
+                source: 'radar-source',
+                paint: {
+                    'raster-opacity': parseFloat(document.getElementById('opacity-slider').value),
+                    'raster-resampling': 'nearest',
+                    'raster-fade-duration': 0
+                }
+            }, firstTopLayerId);
 
             updateFrame(frames.length - 1);
         }
 
         function updateFrame(idx) {
             currentIndex = parseInt(idx);
-            const op = parseFloat(document.getElementById('opacity-slider').value);
-            frames.forEach((_, i) => {
-                map.setPaintProperty(`radar-lyr-${i}`, 'raster-opacity', i === currentIndex ? op : 0);
-            });
-            document.getElementById('timestamp').innerText = frames[currentIndex].time;
+            const frame = frames[currentIndex];
+            if (!frame) return;
+
+            // Efficiently update the existing source
+            const source = map.getSource('radar-source');
+            if (source) {
+                source.updateImage({
+                    url: frame.url,
+                    coordinates: [
+                        [frame.bounds[0], frame.bounds[3]],
+                        [frame.bounds[2], frame.bounds[3]],
+                        [frame.bounds[2], frame.bounds[1]],
+                        [frame.bounds[0], frame.bounds[1]]
+                    ]
+                });
+            }
+
+            document.getElementById('timestamp').innerText = frame.time;
             document.getElementById('time-slider').value = currentIndex;
         }
 
@@ -166,9 +192,17 @@
             playTimer = setTimeout(animate, delay);
         }
 
+        // Listeners
         document.getElementById('play-btn').onclick = togglePlay;
-        document.getElementById('time-slider').oninput = (e) => { if (isPlaying) togglePlay(); updateFrame(e.target.value); };
-        document.getElementById('opacity-slider').oninput = () => updateFrame(currentIndex);
+        document.getElementById('time-slider').oninput = (e) => {
+            if (isPlaying) togglePlay();
+            updateFrame(e.target.value);
+        };
+        document.getElementById('opacity-slider').oninput = (e) => {
+            if (map.getLayer('radar-layer')) {
+                map.setPaintProperty('radar-layer', 'raster-opacity', parseFloat(e.target.value));
+            }
+        };
 
         init();
     </script>
