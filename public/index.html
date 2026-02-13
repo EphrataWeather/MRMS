@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MRMS Precision Radar</title>
+    <title>MRMS Liquid Radar</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
@@ -11,146 +11,93 @@
 
     <style>
         :root {
-            --glass-bg: rgba(10, 25, 50, 0.65);
-            --glass-border: rgba(100, 150, 255, 0.2);
+            --glass-bg: rgba(6, 12, 26, 0.8);
+            --glass-border: rgba(0, 242, 255, 0.3);
             --accent: #00f2ff;
-            --text-main: #e0f0ff;
+            --text-main: #ffffff;
+            --slider-track: rgba(255, 255, 255, 0.15);
         }
 
-        body { margin: 0; padding: 0; background: #050b14; font-family: 'Inter', sans-serif; overflow: hidden; }
+        body { margin: 0; padding: 0; background: #020408; font-family: 'Inter', sans-serif; }
+        #map { height: 100vh; width: 100vw; background: #020408; }
 
-        #map { height: 100vh; width: 100vw; z-index: 1; }
-
-        /* --- UI: LIQUID GLASS PANEL --- */
+        /* --- UI: LIQUID GLASS DESIGN --- */
         .glass-panel {
             position: absolute;
-            bottom: 30px;
+            bottom: 40px;
             left: 50%;
             transform: translateX(-50%);
             width: 90%;
-            max-width: 600px;
+            max-width: 550px;
             background: var(--glass-bg);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             border: 1px solid var(--glass-border);
-            border-radius: 20px;
-            padding: 20px;
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+            border-radius: 24px;
+            padding: 24px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
             z-index: 1000;
             color: var(--text-main);
-            transition: all 0.3s ease;
         }
 
-        /* Top Header Area */
         .panel-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 15px;
+            margin-bottom: 20px;
         }
-        .title-block h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
-        .title-block span { font-size: 12px; opacity: 0.7; color: var(--accent); text-transform: uppercase; }
+
+        .title-block h1 { margin: 0; font-size: 16px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px; color: var(--accent); }
         
         #timestamp {
-            font-family: 'Courier New', monospace;
-            font-weight: bold;
-            background: rgba(0,0,0,0.3);
-            padding: 5px 10px;
+            font-family: 'Monaco', monospace;
+            font-size: 14px;
+            background: rgba(0,0,0,0.4);
+            padding: 6px 12px;
             border-radius: 8px;
             border: 1px solid var(--glass-border);
-            min-width: 140px;
-            text-align: center;
+            color: #fff;
         }
 
-        /* Controls Grid */
-        .controls-grid {
-            display: grid;
-            grid-template-columns: auto 1fr;
-            gap: 15px;
-            align-items: center;
-        }
+        /* --- CONTROLS --- */
+        .main-controls { display: flex; align-items: center; gap: 20px; }
 
-        /* Play Button */
         #play-btn {
-            width: 45px;
-            height: 45px;
-            border-radius: 50%;
-            border: none;
-            background: linear-gradient(135deg, #00c6ff, #0072ff);
-            color: white;
-            font-size: 16px;
-            cursor: pointer;
-            box-shadow: 0 4px 15px rgba(0, 114, 255, 0.4);
-            transition: transform 0.1s;
+            width: 50px; height: 50px; border-radius: 50%; border: none;
+            background: var(--accent); color: #000; font-size: 18px;
+            cursor: pointer; box-shadow: 0 0 15px rgba(0, 242, 255, 0.4);
+            display: flex; align-items: center; justify-content: center;
+            transition: 0.2s;
         }
-        #play-btn:active { transform: scale(0.95); }
+        #play-btn:hover { transform: scale(1.05); box-shadow: 0 0 25px rgba(0, 242, 255, 0.6); }
 
-        /* Sliders Styling */
-        .slider-group { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+        .sliders-container { flex: 1; display: flex; flex-direction: column; gap: 15px; }
+
+        /* Custom Slider Styling */
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; cursor: pointer; }
         
-        input[type=range] {
-            -webkit-appearance: none;
-            width: 100%;
-            background: transparent;
-        }
-        
-        /* Time Scrubber (The Big Bar) */
-        #time-slider {
-            height: 6px;
-            background: rgba(255,255,255,0.1);
-            border-radius: 3px;
-            outline: none;
-        }
+        /* Time Scrubber Track */
+        #time-slider { height: 8px; background: var(--slider-track); border-radius: 4px; }
         #time-slider::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            height: 18px;
-            width: 18px;
-            border-radius: 50%;
-            background: var(--accent);
-            cursor: pointer;
-            box-shadow: 0 0 10px var(--accent);
-            margin-top: -6px; 
-        }
-        #time-slider::-webkit-slider-runnable-track {
-            height: 6px;
-            border-radius: 3px;
-            background: linear-gradient(90deg, var(--accent) var(--progress, 0%), rgba(255,255,255,0.1) var(--progress, 0%));
+            -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%;
+            background: #fff; box-shadow: 0 0 10px rgba(0,242,255,0.8); margin-top: -6px;
         }
 
-        /* Mini Sliders (Speed & Opacity) */
-        .settings-row {
-            display: flex;
-            gap: 20px;
-            margin-top: 10px;
-            font-size: 12px;
-            color: rgba(255,255,255,0.6);
-        }
-        .setting { display: flex; align-items: center; gap: 10px; flex: 1; }
-        .mini-slider {
-            flex: 1;
-            height: 4px;
-            background: rgba(255,255,255,0.1);
-            border-radius: 2px;
-        }
-        .mini-slider::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            height: 12px;
-            width: 12px;
-            border-radius: 50%;
-            background: #fff;
-            cursor: pointer;
-        }
-
-        /* --- CRITICAL: SHARP RADAR CSS --- */
-        .leaflet-image-layer {
-            image-rendering: pixelated; /* Forces crisp squares */
-            image-rendering: crisp-edges;
-            transition: opacity 0.15s ease-in-out; /* Smooths the frame transitions */
-        }
+        .sub-settings { display: flex; gap: 25px; align-items: center; }
+        .setting-item { display: flex; align-items: center; gap: 10px; flex: 1; font-size: 11px; opacity: 0.8; }
         
-        /* Hide Leaflet Controls to keep UI clean */
-        .leaflet-control-attribution { opacity: 0.5; font-size: 10px; }
+        /* Small Sliders */
+        .mini-slider { height: 4px; background: var(--slider-track); border-radius: 2px; flex: 1; }
+        .mini-slider::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 12px; width: 12px; border-radius: 50%;
+            background: var(--accent);
+        }
 
+        /* --- MAP LAYER FIXES --- */
+        .leaflet-image-layer {
+            image-rendering: pixelated;
+            transition: opacity 0.2s ease-in-out; /* Smooth fade between frames */
+        }
     </style>
 </head>
 <body>
@@ -160,26 +107,25 @@
     <div class="glass-panel">
         <div class="panel-header">
             <div class="title-block">
-                <h1>PRECISION RADAR</h1>
-                <span>Live MRMS Feed</span>
+                <h1>MRMS Live Radar</h1>
             </div>
-            <div id="timestamp">Loading...</div>
+            <div id="timestamp">Syncing...</div>
         </div>
 
-        <div class="controls-grid">
+        <div class="main-controls">
             <button id="play-btn"><i class="fas fa-play"></i></button>
             
-            <div class="slider-group">
-                <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
+            <div class="sliders-container">
+                <input type="range" id="time-slider" min="0" max="9" value="9" step="1">
                 
-                <div class="settings-row">
-                    <div class="setting">
-                        <i class="fas fa-eye"></i>
-                        <input type="range" id="opacity-slider" class="mini-slider" min="0" max="1" step="0.1" value="0.8">
+                <div class="sub-settings">
+                    <div class="setting-item">
+                        <i class="fas fa-layer-group"></i>
+                        <input type="range" id="opacity-slider" class="mini-slider" min="0" max="1" step="0.1" value="0.7">
                     </div>
-                    <div class="setting">
-                        <i class="fas fa-tachometer-alt"></i>
-                        <input type="range" id="speed-slider" class="mini-slider" min="100" max="2000" step="100" value="500">
+                    <div class="setting-item">
+                        <i class="fas fa-bolt"></i>
+                        <input type="range" id="speed-slider" class="mini-slider" min="1" max="10" step="1" value="5">
                     </div>
                 </div>
             </div>
@@ -188,217 +134,119 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // --- 1. INITIALIZE MAP ---
-        // We start centered on US, but will zoom to data bounds later
-        const map = L.map('map', {
-            zoomControl: false, 
-            background: '#050b14'
-        }).setView([39.8, -98.6], 4);
+        // 1. Setup Premium Themed Map
+        const map = L.map('map', { zoomControl: false }).setView([38.0, -97.0], 4);
 
-        // --- 2. LAYERS (The "Sandwich" Strategy) ---
-        
-        // A. Bottom Bun: Dark Base Map (No Labels)
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; OpenStreetMap &copy; CARTO',
-            subdomains: 'abcd',
-            maxZoom: 19
-        }).addTo(map);
+        // CREATE PANES (Ordering Layers)
+        map.createPane('radarPane').style.zIndex = 400;
+        map.createPane('labelsPane').style.zIndex = 600;
+        map.getPane('labelsPane').style.pointerEvents = 'none';
 
-        // B. The Meat: Create a pane for Radar so it sits in the middle
-        map.createPane('radarPane');
-        map.getPane('radarPane').style.zIndex = 400; // Above base (200), below labels (600)
+        // Base Layer (Dark, No labels)
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
 
-        // C. Top Bun: Labels & Borders (Transparent Background)
-        map.createPane('labelsPane');
-        map.getPane('labelsPane').style.zIndex = 650; // Very high z-index
-        map.getPane('labelsPane').style.pointerEvents = 'none'; // Let clicks pass through to map
-
+        // Label Layer (Borders and Town Names - Sits on TOP of radar)
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-            attribution: '',
-            subdomains: 'abcd',
-            pane: 'labelsPane' 
+            pane: 'labelsPane'
         }).addTo(map);
 
-        // --- 3. STATE MANAGEMENT ---
-        let frames = []; // Will hold { url, bounds, time }
-        let loadedLayers = []; // Leaflet ImageOverlay objects
+        // 2. Data State
+        let frames = [];
+        let layers = [];
         let currentIndex = 0;
         let isPlaying = false;
-        let playInterval;
-        let playbackSpeed = 500; // ms per frame
+        let playTimer = null;
 
-        // UI Elements
         const timeSlider = document.getElementById('time-slider');
-        const timestampDisplay = document.getElementById('timestamp');
+        const timestamp = document.getElementById('timestamp');
         const playBtn = document.getElementById('play-btn');
         const opacitySlider = document.getElementById('opacity-slider');
         const speedSlider = document.getElementById('speed-slider');
 
-        // --- 4. LOAD DATA ---
-        async function loadRadarData() {
-            frames = [];
-            // Try to load up to 10 frames
-            for (let i = 9; i >= 0; i--) {
+        async function init() {
+            // Load newest to oldest metadata
+            for (let i = 0; i < 10; i++) {
                 try {
-                    // Cache buster to ensure fresh data
-                    const metaRes = await fetch(`data/metadata_${i}.json?nocache=${Date.now()}`);
-                    if (!metaRes.ok) continue;
-                    const meta = await metaRes.json();
-                    
+                    const r = await fetch(`data/metadata_${i}.json?t=${Date.now()}`);
+                    if (!r.ok) continue;
+                    const meta = await r.json();
                     frames.push({
-                        url: `data/master_${i}.png?nocache=${Date.now()}`,
-                        bounds: meta.bounds,
+                        id: i,
+                        url: `data/master_${i}.png?t=${Date.now()}`,
                         time: meta.time,
-                        id: i
+                        bounds: meta.bounds
                     });
-                } catch (e) {
-                    console.log(`Frame ${i} missing or failed.`);
-                }
+                } catch(e) {}
             }
-            
-            // Sort by time (Oldest -> Newest) based on ID usually, 
-            // but our script saves master_0 as NEWEST. 
-            // So we need to reverse the array to play chronologically.
+
+            // CRITICAL: We want oldest data on the LEFT of the slider.
+            // metadata_0 is newest. metadata_9 is oldest.
+            // We reverse so frames[0] is the oldest.
             frames.reverse(); 
 
-            if (frames.length > 0) {
-                initLayers();
-                setupControls();
-            } else {
-                timestampDisplay.textContent = "No Data";
-            }
-        }
-
-        // --- 5. INITIALIZE LAYERS ---
-        function initLayers() {
-            // Remove old layers
-            loadedLayers.forEach(l => map.removeLayer(l));
-            loadedLayers = [];
-
-            frames.forEach((frame, index) => {
-                const layer = L.imageOverlay(frame.url, frame.bounds, {
-                    opacity: 0, // Start invisible
+            frames.forEach((f, idx) => {
+                const layer = L.imageOverlay(f.url, f.bounds, {
                     pane: 'radarPane',
+                    opacity: 0,
                     interactive: false
                 }).addTo(map);
-                
-                loadedLayers.push(layer);
+                layers.push(layer);
             });
 
-            // Set up slider range
             timeSlider.max = frames.length - 1;
-            timeSlider.value = frames.length - 1; // Start at latest
+            timeSlider.value = frames.length - 1; // Default to newest
             
-            // Show latest frame
+            // Zoom to show data
+            if(frames.length > 0) map.fitBounds(frames[frames.length-1].bounds);
+            
             updateFrame(frames.length - 1);
-            
-            // Zoom to bounds of the newest frame
-            map.fitBounds(frames[frames.length - 1].bounds);
         }
 
-        // --- 6. ANIMATION LOGIC ---
-        function updateFrame(index) {
-            // Ensure index is valid
-            if (index < 0) index = 0;
-            if (index >= frames.length) index = frames.length - 1;
+        function updateFrame(idx) {
+            currentIndex = parseInt(idx);
+            const op = opacitySlider.value;
             
-            currentIndex = index;
-
-            // Update UI
-            timestampDisplay.textContent = frames[index].time;
-            timeSlider.value = index;
-            
-            // Update Slider Gradient (Visual Progress)
-            const progress = (index / timeSlider.max) * 100;
-            timeSlider.style.setProperty('--progress', `${progress}%`);
-
-            // SMOOTH TRANSITION:
-            // Loop through all layers. 
-            // If it's the current one -> Opacity = Slider Value
-            // If it's NOT -> Opacity = 0
-            const masterOpacity = parseFloat(opacitySlider.value);
-            
-            loadedLayers.forEach((layer, i) => {
-                if (i === index) {
-                    layer.setOpacity(masterOpacity);
-                } else {
-                    layer.setOpacity(0);
-                }
+            layers.forEach((l, i) => {
+                l.setOpacity(i === currentIndex ? op : 0);
             });
-        }
 
-        function play() {
-            isPlaying = true;
-            playBtn.innerHTML = '<i class="fas fa-pause"></i>';
-            
-            clearInterval(playInterval);
-            playInterval = setInterval(() => {
-                let next = currentIndex + 1;
-                if (next >= frames.length) next = 0; // Loop
-                updateFrame(next);
-            }, playbackSpeed);
-        }
-
-        function pause() {
-            isPlaying = false;
-            playBtn.innerHTML = '<i class="fas fa-play"></i>';
-            clearInterval(playInterval);
+            timestamp.innerText = frames[currentIndex].time;
+            timeSlider.value = currentIndex;
         }
 
         function togglePlay() {
-            if (isPlaying) pause();
-            else play();
+            isPlaying = !isPlaying;
+            playBtn.innerHTML = isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
+            
+            if (isPlaying) {
+                const step = () => {
+                    if (!isPlaying) return;
+                    let next = currentIndex + 1;
+                    if (next >= frames.length) next = 0;
+                    updateFrame(next);
+                    
+                    // Calculate delay: 1100ms (slow) down to 100ms (fast)
+                    const delay = 1100 - (speedSlider.value * 100);
+                    playTimer = setTimeout(step, delay);
+                };
+                step();
+            } else {
+                clearTimeout(playTimer);
+            }
         }
 
-        // --- 7. EVENT LISTENERS ---
+        // Listeners
+        timeSlider.oninput = (e) => { isPlaying = false; pauseUI(); updateFrame(e.target.value); };
+        opacitySlider.oninput = () => updateFrame(currentIndex);
+        playBtn.onclick = togglePlay;
         
-        // Play Button
-        playBtn.addEventListener('click', togglePlay);
+        function pauseUI() { 
+            isPlaying = false; 
+            playBtn.innerHTML = '<i class="fas fa-play"></i>'; 
+            clearTimeout(playTimer); 
+        }
 
-        // Time Slider (Scrubbing)
-        timeSlider.addEventListener('input', (e) => {
-            pause(); // Stop playing if user drags
-            updateFrame(parseInt(e.target.value));
-        });
-
-        // Opacity Slider
-        opacitySlider.addEventListener('input', (e) => {
-            const val = parseFloat(e.target.value);
-            // Update current frame immediately
-            if(loadedLayers[currentIndex]) {
-                loadedLayers[currentIndex].setOpacity(val);
-            }
-        });
-
-        // Speed Slider (Inverse logic: Left=Slow, Right=Fast)
-        speedSlider.addEventListener('input', (e) => {
-            // Slider value: 100 (fast) to 2000 (slow)
-            // We want the slider to feel like "Speed", so we invert the logic visually if needed
-            // But here let's just use the raw ms value but invert the slider direction in CSS or logic
-            // Let's make Left = Fast (100ms), Right = Slow (1000ms)? 
-            // Standard is Left=Low Speed, Right=High Speed.
-            // So: Value 1 = 2000ms, Value 100 = 100ms.
-            
-            // Simple mapping: 
-            // We use the slider directly as MS delay (100ms to 2000ms).
-            // But we want "High Speed" (Right) to be lower MS.
-            const rawVal = parseInt(e.target.value);
-            // Invert: Max(2100) - val
-            playbackSpeed = 2100 - rawVal; 
-            
-            if (isPlaying) play(); // Restart interval with new speed
-        });
-
-        // Keyboard Controls
-        document.addEventListener('keydown', (e) => {
-            if (e.code === 'Space') togglePlay();
-            if (e.code === 'ArrowRight') { pause(); updateFrame(currentIndex + 1); }
-            if (e.code === 'ArrowLeft') { pause(); updateFrame(currentIndex - 1); }
-        });
-
-        // Start
-        loadRadarData();
-
+        init();
     </script>
 </body>
 </html>
