@@ -80,7 +80,7 @@
     <script>
         // 1. SETTINGS
         const TOKEN = 'pk.eyJ1IjoiZ3RnMDExNiIsImEiOiJjbWxsODV6NXAwNThmM2ZwdWlkYm0xNjFlIn0.vI186twXYzY45nnuV5FucQ';
-        const DATA_PATH = 'public/data'; // Change to 'data' if you don't use a public folder
+        const DATA_PATH = 'data'; // Change to 'data' if you don't use a public folder
 
         mapboxgl.accessToken = TOKEN;
         const map = new mapboxgl.Map({
@@ -96,19 +96,31 @@
         let isPlaying = false;
 
         // 2. LOAD DATA
-        async function init() {
-            for (let i = 0; i < 10; i++) {
-                try {
-                    const res = await fetch(`${DATA_PATH}/metadata_${i}.json`);
-                    if (!res.ok) continue;
-                    const meta = await res.json();
-                    frames.push({
-                        id: i,
-                        url: `${DATA_PATH}/master_${i}.png`,
-                        time: meta.time,
-                        bounds: [meta.bounds[0][1], meta.bounds[0][0], meta.bounds[1][1], meta.bounds[1][0]]
-                    });
-                } catch (e) { console.error("Error loading frame", i); }
+       async function init() {
+    // This looks at the current URL and decides if it needs to add 'public' or not
+    const currentPath = window.location.pathname;
+    const baseDataPath = currentPath.endsWith('public/') || currentPath.includes('public/index.html') 
+                         ? 'data' 
+                         : 'public/data';
+
+    console.log("Fetching radar from:", baseDataPath);
+
+    for (let i = 0; i < 10; i++) {
+        try {
+            const res = await fetch(`${baseDataPath}/metadata_${i}.json?t=${Date.now()}`);
+            if (!res.ok) continue;
+            const meta = await res.json();
+            
+            frames.push({
+                id: i,
+                url: `${baseDataPath}/master_${i}.png?t=${Date.now()}`,
+                time: meta.time,
+                bounds: [meta.bounds[0][1], meta.bounds[0][0], meta.bounds[1][1], meta.bounds[1][0]]
+            });
+        } catch (e) { console.warn("Frame skipping:", i); }
+    }
+    // ... rest of your init code
+}
             }
 
             if (frames.length === 0) {
