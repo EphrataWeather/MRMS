@@ -3,157 +3,145 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MRMS Liquid Radar</title>
+    <title>Precision MRMS | Pro</title>
     
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <style>
         :root {
-            --glass-bg: rgba(6, 12, 26, 0.8);
-            --glass-border: rgba(0, 242, 255, 0.3);
+            --bg-glass: rgba(13, 20, 34, 0.85);
             --accent: #00f2ff;
-            --text-main: #ffffff;
-            --slider-track: rgba(255, 255, 255, 0.15);
+            --border: rgba(255, 255, 255, 0.1);
         }
 
-        body { margin: 0; padding: 0; background: #020408; font-family: 'Inter', sans-serif; }
-        #map { height: 100vh; width: 100vw; background: #020408; }
+        body { margin: 0; padding: 0; font-family: 'Inter', sans-serif; background: #010409; color: white; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
 
-        /* --- UI: LIQUID GLASS DESIGN --- */
-        .glass-panel {
+        /* --- LIQUID GLASS UI --- */
+        .ui-container {
             position: absolute;
-            bottom: 40px;
+            bottom: 30px;
             left: 50%;
             transform: translateX(-50%);
             width: 90%;
-            max-width: 550px;
-            background: var(--glass-bg);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 1px solid var(--glass-border);
+            max-width: 650px;
+            background: var(--bg-glass);
+            backdrop-filter: blur(25px) saturate(180%);
+            -webkit-backdrop-filter: blur(25px) saturate(180%);
+            border: 1px solid var(--border);
             border-radius: 24px;
             padding: 24px;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
-            z-index: 1000;
-            color: var(--text-main);
+            box-shadow: 0 15px 50px rgba(0,0,0,0.8);
+            z-index: 10;
         }
 
-        .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-
-        .title-block h1 { margin: 0; font-size: 16px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px; color: var(--accent); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .logo-section h1 { margin: 0; font-size: 14px; letter-spacing: 3px; color: var(--accent); font-weight: 600; text-transform: uppercase; }
         
         #timestamp {
-            font-family: 'Monaco', monospace;
-            font-size: 14px;
-            background: rgba(0,0,0,0.4);
-            padding: 6px 12px;
-            border-radius: 8px;
-            border: 1px solid var(--glass-border);
-            color: #fff;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            background: rgba(0,0,0,0.5);
+            padding: 6px 14px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
         }
 
         /* --- CONTROLS --- */
-        .main-controls { display: flex; align-items: center; gap: 20px; }
-
+        .controls-wrapper { display: flex; align-items: center; gap: 20px; }
+        
         #play-btn {
-            width: 50px; height: 50px; border-radius: 50%; border: none;
-            background: var(--accent); color: #000; font-size: 18px;
-            cursor: pointer; box-shadow: 0 0 15px rgba(0, 242, 255, 0.4);
+            width: 54px; height: 54px; border-radius: 18px; border: none;
+            background: var(--accent); color: #000; font-size: 20px;
+            cursor: pointer; transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             display: flex; align-items: center; justify-content: center;
-            transition: 0.2s;
         }
-        #play-btn:hover { transform: scale(1.05); box-shadow: 0 0 25px rgba(0, 242, 255, 0.6); }
+        #play-btn:hover { transform: translateY(-3px); box-shadow: 0 10px 20px rgba(0, 242, 255, 0.3); }
 
-        .sliders-container { flex: 1; display: flex; flex-direction: column; gap: 15px; }
+        .sliders-group { flex: 1; display: flex; flex-direction: column; gap: 18px; }
 
-        /* Custom Slider Styling */
         input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; cursor: pointer; }
         
-        /* Time Scrubber Track */
-        #time-slider { height: 8px; background: var(--slider-track); border-radius: 4px; }
+        /* Time Slider */
+        #time-slider { height: 6px; background: rgba(255,255,255,0.1); border-radius: 10px; }
         #time-slider::-webkit-slider-thumb {
-            -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%;
-            background: #fff; box-shadow: 0 0 10px rgba(0,242,255,0.8); margin-top: -6px;
+            -webkit-appearance: none; height: 18px; width: 18px; border-radius: 50%;
+            background: white; border: 3px solid var(--accent); box-shadow: 0 0 15px var(--accent);
         }
 
-        .sub-settings { display: flex; gap: 25px; align-items: center; }
-        .setting-item { display: flex; align-items: center; gap: 10px; flex: 1; font-size: 11px; opacity: 0.8; }
-        
-        /* Small Sliders */
-        .mini-slider { height: 4px; background: var(--slider-track); border-radius: 2px; flex: 1; }
-        .mini-slider::-webkit-slider-thumb {
-            -webkit-appearance: none; height: 12px; width: 12px; border-radius: 50%;
-            background: var(--accent);
-        }
+        .sub-controls { display: flex; gap: 30px; opacity: 0.7; }
+        .control-item { display: flex; align-items: center; gap: 10px; flex: 1; font-size: 11px; }
+        .mini-slider { height: 3px; background: rgba(255,255,255,0.1); border-radius: 10px; flex: 1; }
+        .mini-slider::-webkit-slider-thumb { -webkit-appearance: none; height: 10px; width: 10px; border-radius: 50%; background: white; }
 
-        /* --- MAP LAYER FIXES --- */
-        .leaflet-image-layer {
-            image-rendering: pixelated;
-            transition: opacity 0.2s ease-in-out; /* Smooth fade between frames */
+        /* Style Toggles */
+        .map-style-toggle {
+            position: absolute; top: 20px; right: 20px;
+            background: var(--bg-glass); border: 1px solid var(--border);
+            padding: 5px; border-radius: 12px; display: flex; gap: 5px;
         }
+        .style-btn {
+            padding: 8px 12px; font-size: 11px; border-radius: 8px; border: none;
+            background: transparent; color: white; cursor: pointer; transition: 0.2s;
+        }
+        .style-btn.active { background: rgba(255,255,255,0.1); color: var(--accent); }
+
     </style>
 </head>
 <body>
 
     <div id="map"></div>
 
-    <div class="glass-panel">
-        <div class="panel-header">
-            <div class="title-block">
-                <h1>MRMS Live Radar</h1>
+    <div class="map-style-toggle">
+        <button class="style-btn active" onclick="setStyle('dark')">DARK</button>
+        <button class="style-btn" onclick="setStyle('satellite')">SATELLITE</button>
+    </div>
+
+    <div class="ui-container">
+        <div class="header">
+            <div class="logo-section">
+                <h1>Precision MRMS</h1>
             </div>
-            <div id="timestamp">Syncing...</div>
+            <div id="timestamp">SYNCING DATA...</div>
         </div>
 
-        <div class="main-controls">
+        <div class="controls-wrapper">
             <button id="play-btn"><i class="fas fa-play"></i></button>
-            
-            <div class="sliders-container">
-                <input type="range" id="time-slider" min="0" max="9" value="9" step="1">
-                
-                <div class="sub-settings">
-                    <div class="setting-item">
-                        <i class="fas fa-layer-group"></i>
-                        <input type="range" id="opacity-slider" class="mini-slider" min="0" max="1" step="0.1" value="0.7">
+            <div class="sliders-group">
+                <input type="range" id="time-slider" min="0" max="9" value="9">
+                <div class="sub-controls">
+                    <div class="control-item">
+                        <i class="fas fa-eye"></i>
+                        <input type="range" id="opacity-slider" class="mini-slider" min="0" max="1" step="0.1" value="0.8">
                     </div>
-                    <div class="setting-item">
-                        <i class="fas fa-bolt"></i>
-                        <input type="range" id="speed-slider" class="mini-slider" min="1" max="10" step="1" value="5">
+                    <div class="control-item">
+                        <i class="fas fa-wind"></i>
+                        <input type="range" id="speed-slider" class="mini-slider" min="1" max="10" step="1" value="6">
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // 1. Setup Premium Themed Map
-        const map = L.map('map', { zoomControl: false }).setView([38.0, -97.0], 4);
+        // 1. Initialize Mapbox
+        // IMPORTANT: Replace this with your token
+        mapboxgl.accessToken = 'pk.eyJ1IjoiZ3RnMDExNiIsImEiOiJjbWxsODV6NXAwNThmM2ZwdWlkYm0xNjFlIn0.vI186twXYzY45nnuV5FucQ';
 
-        // CREATE PANES (Ordering Layers)
-        map.createPane('radarPane').style.zIndex = 400;
-        map.createPane('labelsPane').style.zIndex = 600;
-        map.getPane('labelsPane').style.pointerEvents = 'none';
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/dark-v11',
+            center: [-98, 38],
+            zoom: 4,
+            pitch: 30, // Slight tilt for premium feel
+            antialias: true
+        });
 
-        // Base Layer (Dark, No labels)
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
-
-        // Label Layer (Borders and Town Names - Sits on TOP of radar)
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-            pane: 'labelsPane'
-        }).addTo(map);
-
-        // 2. Data State
         let frames = [];
-        let layers = [];
-        let currentIndex = 0;
+        let currentIndex = 9;
         let isPlaying = false;
         let playTimer = null;
 
@@ -163,51 +151,66 @@
         const opacitySlider = document.getElementById('opacity-slider');
         const speedSlider = document.getElementById('speed-slider');
 
-        async function init() {
-            // Load newest to oldest metadata
+        // 2. Fetch Metadata and Layers
+        async function loadRadar() {
             for (let i = 0; i < 10; i++) {
                 try {
-                    const r = await fetch(`data/metadata_${i}.json?t=${Date.now()}`);
-                    if (!r.ok) continue;
-                    const meta = await r.json();
+                    const res = await fetch(`data/metadata_${i}.json?t=${Date.now()}`);
+                    if (!res.ok) continue;
+                    const meta = await res.json();
+                    
+                    // Mapbox uses [West, South, East, North] for image source
+                    const b = meta.bounds;
+                    const mapboxBounds = [b[0][1], b[0][0], b[1][1], b[1][0]];
+
                     frames.push({
                         id: i,
                         url: `data/master_${i}.png?t=${Date.now()}`,
                         time: meta.time,
-                        bounds: meta.bounds
+                        bounds: mapboxBounds
                     });
-                } catch(e) {}
+                } catch (e) {}
             }
-
-            // CRITICAL: We want oldest data on the LEFT of the slider.
-            // metadata_0 is newest. metadata_9 is oldest.
-            // We reverse so frames[0] is the oldest.
-            frames.reverse(); 
-
-            frames.forEach((f, idx) => {
-                const layer = L.imageOverlay(f.url, f.bounds, {
-                    pane: 'radarPane',
-                    opacity: 0,
-                    interactive: false
-                }).addTo(map);
-                layers.push(layer);
+            frames.reverse(); // Oldest to Newest
+            
+            map.on('load', () => {
+                setupRadarLayers();
+                updateFrame(frames.length - 1);
             });
+        }
 
-            timeSlider.max = frames.length - 1;
-            timeSlider.value = frames.length - 1; // Default to newest
-            
-            // Zoom to show data
-            if(frames.length > 0) map.fitBounds(frames[frames.length-1].bounds);
-            
-            updateFrame(frames.length - 1);
+        function setupRadarLayers() {
+            frames.forEach((f, idx) => {
+                map.addSource(`radar-source-${idx}`, {
+                    type: 'image',
+                    url: f.url,
+                    coordinates: [
+                        [f.bounds[0], f.bounds[3]], // Top Left
+                        [f.bounds[2], f.bounds[3]], // Top Right
+                        [f.bounds[2], f.bounds[1]], // Bottom Right
+                        [f.bounds[0], f.bounds[1]]  // Bottom Left
+                    ]
+                });
+
+                // PREMIUM FEATURE: Inject layer BEFORE labels
+                // This keeps city names visible on top of the radar
+                const labelLayerId = map.getStyle().layers.find(l => l.type === 'symbol').id;
+
+                map.addLayer({
+                    id: `radar-layer-${idx}`,
+                    type: 'raster',
+                    source: `radar-source-${idx}`,
+                    paint: { 'raster-opacity': 0, 'raster-fade-duration': 200 }
+                }, labelLayerId);
+            });
         }
 
         function updateFrame(idx) {
             currentIndex = parseInt(idx);
-            const op = opacitySlider.value;
+            const op = parseFloat(opacitySlider.value);
             
-            layers.forEach((l, i) => {
-                l.setOpacity(i === currentIndex ? op : 0);
+            frames.forEach((_, i) => {
+                map.setPaintProperty(`radar-layer-${i}`, 'raster-opacity', i === currentIndex ? op : 0);
             });
 
             timestamp.innerText = frames[currentIndex].time;
@@ -217,36 +220,33 @@
         function togglePlay() {
             isPlaying = !isPlaying;
             playBtn.innerHTML = isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
-            
-            if (isPlaying) {
-                const step = () => {
-                    if (!isPlaying) return;
-                    let next = currentIndex + 1;
-                    if (next >= frames.length) next = 0;
-                    updateFrame(next);
-                    
-                    // Calculate delay: 1100ms (slow) down to 100ms (fast)
-                    const delay = 1100 - (speedSlider.value * 100);
-                    playTimer = setTimeout(step, delay);
-                };
-                step();
-            } else {
-                clearTimeout(playTimer);
-            }
+            if (isPlaying) animate();
+            else clearTimeout(playTimer);
+        }
+
+        function animate() {
+            if (!isPlaying) return;
+            let next = currentIndex + 1;
+            if (next >= frames.length) next = 0;
+            updateFrame(next);
+            const delay = 1100 - (speedSlider.value * 100);
+            playTimer = setTimeout(animate, delay);
+        }
+
+        function setStyle(type) {
+            const style = type === 'satellite' ? 'mapbox://styles/mapbox/satellite-streets-v12' : 'mapbox://styles/mapbox/dark-v11';
+            map.setStyle(style);
+            // Re-add radar layers after style changes
+            map.once('style.load', setupRadarLayers);
+            document.querySelectorAll('.style-btn').forEach(b => b.classList.toggle('active', b.innerText.toLowerCase() === type));
         }
 
         // Listeners
-        timeSlider.oninput = (e) => { isPlaying = false; pauseUI(); updateFrame(e.target.value); };
+        timeSlider.oninput = (e) => { isPlaying = false; playBtn.innerHTML = '<i class="fas fa-play"></i>'; updateFrame(e.target.value); };
         opacitySlider.oninput = () => updateFrame(currentIndex);
         playBtn.onclick = togglePlay;
-        
-        function pauseUI() { 
-            isPlaying = false; 
-            playBtn.innerHTML = '<i class="fas fa-play"></i>'; 
-            clearTimeout(playTimer); 
-        }
 
-        init();
+        loadRadar();
     </script>
 </body>
 </html>
