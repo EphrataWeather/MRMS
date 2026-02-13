@@ -3,111 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Precision MRMS | Pro</title>
+    <title>Precision MRMS | Live</title>
     
     <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
     <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <style>
-        :root {
-            --bg-glass: rgba(10, 15, 28, 0.9);
-            --accent: #00f2ff;
-            --border: rgba(255, 255, 255, 0.1);
-        }
-
-        body { margin: 0; padding: 0; font-family: 'Inter', sans-serif; background: #010409; color: white; overflow: hidden; }
+        :root { --bg: rgba(10, 15, 25, 0.9); --accent: #00f2ff; --border: rgba(255, 255, 255, 0.1); }
+        body { margin: 0; padding: 0; background: #010409; color: white; overflow: hidden; font-family: 'Inter', sans-serif; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
 
-        /* --- UI: LIQUID GLASS UI --- */
-        .ui-container {
-            position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 95%;
-            max-width: 500px; /* Slimmer for better mobile/desktop balance */
-            background: var(--bg-glass);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 1px solid var(--border);
-            border-radius: 20px;
-            padding: 15px 20px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.8);
-            z-index: 10;
+        /* --- CLEAN PRO UI --- */
+        .ui-card {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            width: 90%; max-width: 480px; background: var(--bg);
+            backdrop-filter: blur(15px); border: 1px solid var(--border);
+            border-radius: 16px; padding: 20px; z-index: 10;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
         }
 
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .logo-section h1 { margin: 0; font-size: 12px; letter-spacing: 2px; color: var(--accent); text-transform: uppercase; }
-        
-        #timestamp { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #aaa; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .logo { font-size: 11px; letter-spacing: 2px; color: var(--accent); text-transform: uppercase; font-weight: 600; }
+        #timestamp { font-family: 'JetBrains Mono', monospace; font-size: 11px; opacity: 0.7; }
 
-        /* --- CONTROLS --- */
-        .controls-row { display: flex; align-items: center; gap: 15px; }
+        .control-grid { display: grid; grid-template-columns: 50px 1fr; gap: 15px; align-items: center; }
         
         #play-btn {
-            width: 44px; height: 44px; border-radius: 12px; border: none;
-            background: var(--accent); color: #000; font-size: 18px;
-            cursor: pointer; flex-shrink: 0;
+            width: 50px; height: 50px; border-radius: 12px; border: none;
+            background: var(--accent); color: #000; cursor: pointer; font-size: 18px;
         }
 
-        .sliders-stack { flex: 1; display: flex; flex-direction: column; gap: 12px; }
-
-        /* Fixes the "Dot" overlapping issue */
-        .sub-settings { display: flex; gap: 15px; }
-        .setting-item { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
-        .setting-item i { font-size: 12px; opacity: 0.6; width: 15px; text-align: center; }
-
-        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; cursor: pointer; height: 20px; }
+        .sliders { display: flex; flex-direction: column; gap: 12px; }
         
-        /* Tracks */
-        .main-track { height: 4px; background: rgba(255,255,255,0.1); border-radius: 10px; }
-        
-        /* Thumbs */
-        input[type=range]::-webkit-slider-thumb {
-            -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%;
-            background: white; border: 2px solid var(--accent); box-shadow: 0 0 10px var(--accent);
-            margin-top: -5px;
-        }
-
+        /* Range Styling */
+        input[type=range] { -webkit-appearance: none; background: transparent; width: 100%; margin: 0; }
         input[type=range]::-webkit-slider-runnable-track { height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; }
-
-        /* Error Overlay */
-        #error-msg {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(255, 0, 0, 0.8); padding: 20px; border-radius: 10px;
-            display: none; z-index: 9999; text-align: center;
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%;
+            background: #fff; border: 2px solid var(--accent); margin-top: -6px;
+            box-shadow: 0 0 10px rgba(0, 242, 255, 0.5);
         }
+
+        .sub-controls { display: flex; justify-content: space-between; font-size: 12px; opacity: 0.6; }
+        .icon-slider { display: flex; align-items: center; gap: 8px; width: 45%; }
     </style>
 </head>
 <body>
 
-    <div id="error-msg">
-        <h3>Map Configuration Error</h3>
-        <p id="error-text">Please check the browser console (F12) for details.</p>
-    </div>
-
     <div id="map"></div>
 
-    <div class="ui-container">
+    <div class="ui-card">
         <div class="header">
-            <div class="logo-section"><h1>MRMS Precision</h1></div>
-            <div id="timestamp">OFFLINE</div>
+            <div class="logo">MRMS • Live Radar</div>
+            <div id="timestamp">CONNECTING...</div>
         </div>
-
-        <div class="controls-row">
+        <div class="control-grid">
             <button id="play-btn"><i class="fas fa-play"></i></button>
-            <div class="sliders-stack">
+            <div class="sliders">
                 <input type="range" id="time-slider" min="0" max="0" value="0">
-                <div class="sub-settings">
-                    <div class="setting-item">
+                <div class="sub-controls">
+                    <div class="icon-slider">
                         <i class="fas fa-eye"></i>
-                        <input type="range" id="opacity-slider" min="0" max="1" step="0.1" value="0.8">
+                        <input type="range" id="opacity-slider" min="0" max="1" step="0.1" value="0.7">
                     </div>
-                    <div class="setting-item">
-                        <i class="fas fa-tachometer-alt"></i>
-                        <input type="range" id="speed-slider" min="1" max="10" step="1" value="6">
+                    <div class="icon-slider">
+                        <i class="fas fa-bolt"></i>
+                        <input type="range" id="speed-slider" min="1" max="10" value="6">
                     </div>
                 </div>
             </div>
@@ -115,135 +78,91 @@
     </div>
 
     <script>
-        // REPLACE THIS with your actual token from Mapbox.com
-        const MY_TOKEN = 'pk.eyJ1IjoiZ3RnMDExNiIsImEiOiJjbWxsODV6NXAwNThmM2ZwdWlkYm0xNjFlIn0.vI186twXYzY45nnuV5FucQ';
+        // 1. SETTINGS
+        const TOKEN = 'pk.eyJ1IjoiZ3RnMDExNiIsImEiOiJjbWxsODV6NXAwNThmM2ZwdWlkYm0xNjFlIn0.vI186twXYzY45nnuV5FucQ';
+        const DATA_PATH = 'public/data'; // Change to 'data' if you don't use a public folder
 
-        if (MY_TOKEN.includes('YOUR_MAPBOX')) {
-            document.getElementById('error-msg').style.display = 'block';
-            document.getElementById('error-text').innerHTML = "<b>Missing Token:</b> You must replace 'YOUR_MAPBOX_TOKEN_HERE' in the script with your real Mapbox access token.";
-        }
-
-        mapboxgl.accessToken = MY_TOKEN;
-
+        mapboxgl.accessToken = TOKEN;
         const map = new mapboxgl.Map({
             container: 'map',
             style: 'mapbox://styles/mapbox/dark-v11',
             center: [-98, 38],
-            zoom: 3.5,
-            projection: 'mercator', // This removes the "Grey Circle" globe effect
-            antialias: true
+            zoom: 3.8,
+            projection: 'mercator' // Flattens the globe for a cleaner look
         });
 
         let frames = [];
         let currentIndex = 0;
         let isPlaying = false;
-        let playTimer = null;
 
-        const timeSlider = document.getElementById('time-slider');
-        const timestamp = document.getElementById('timestamp');
-        const playBtn = document.getElementById('play-btn');
-        const opacitySlider = document.getElementById('opacity-slider');
-        const speedSlider = document.getElementById('speed-slider');
-
-        async function loadRadar() {
-            console.log("Fetching radar metadata...");
+        // 2. LOAD DATA
+        async function init() {
             for (let i = 0; i < 10; i++) {
                 try {
-                    const res = await fetch(`data/metadata_${i}.json?t=${Date.now()}`);
+                    const res = await fetch(`${DATA_PATH}/metadata_${i}.json`);
                     if (!res.ok) continue;
                     const meta = await res.json();
-                    
-                    const b = meta.bounds;
-                    const mapboxBounds = [b[0][1], b[0][0], b[1][1], b[1][0]];
-
                     frames.push({
                         id: i,
-                        url: `data/master_${i}.png?t=${Date.now()}`,
+                        url: `${DATA_PATH}/master_${i}.png`,
                         time: meta.time,
-                        bounds: mapboxBounds
+                        bounds: [meta.bounds[0][1], meta.bounds[0][0], meta.bounds[1][1], meta.bounds[1][0]]
                     });
-                } catch (e) { console.warn(`Frame ${i} not found`); }
+                } catch (e) { console.error("Error loading frame", i); }
             }
-            
+
             if (frames.length === 0) {
-                timestamp.innerText = "NO DATA FOUND";
+                document.getElementById('timestamp').innerText = "DATA NOT FOUND";
                 return;
             }
 
-            frames.reverse(); // Oldest to Newest
-            timeSlider.max = frames.length - 1;
-            timeSlider.value = frames.length - 1;
+            frames.reverse(); // Newest first
+            document.getElementById('time-slider').max = frames.length - 1;
             
-            if (map.loaded()) setupRadar();
-            else map.on('load', setupRadar);
+            map.on('load', setupLayers);
         }
 
-        function setupRadar() {
+        function setupLayers() {
+            const labelLayerId = map.getStyle().layers.find(l => l.type === 'symbol').id;
+
             frames.forEach((f, idx) => {
-                map.addSource(`radar-source-${idx}`, {
-                    type: 'image',
-                    url: f.url,
-                    coordinates: [
-                        [f.bounds[0], f.bounds[3]], 
-                        [f.bounds[2], f.bounds[3]], 
-                        [f.bounds[2], f.bounds[1]], 
-                        [f.bounds[0], f.bounds[1]]  
-                    ]
+                map.addSource(`radar-${idx}`, {
+                    type: 'image', url: f.url,
+                    coordinates: [[f.bounds[0], f.bounds[3]], [f.bounds[2], f.bounds[3]], [f.bounds[2], f.bounds[1]], [f.bounds[0], f.bounds[1]]]
                 });
-
-                // Find a layer to place the radar behind (usually road labels)
-                const layers = map.getStyle().layers;
-                let labelLayerId;
-                for (let i = 0; i < layers.length; i++) {
-                    if (layers[i].type === 'symbol' && layers[i].layout['text-field']) {
-                        labelLayerId = layers[i].id;
-                        break;
-                    }
-                }
-
                 map.addLayer({
-                    id: `radar-layer-${idx}`,
-                    type: 'raster',
-                    source: `radar-source-${idx}`,
-                    paint: { 'raster-opacity': 0, 'raster-fade-duration': 150 }
+                    id: `layer-${idx}`, type: 'raster', source: `radar-${idx}`,
+                    paint: { 'raster-opacity': 0, 'raster-fade-duration': 100 }
                 }, labelLayerId);
             });
-            
             updateFrame(frames.length - 1);
         }
 
         function updateFrame(idx) {
             currentIndex = parseInt(idx);
-            const op = parseFloat(opacitySlider.value);
-            frames.forEach((_, i) => {
-                map.setPaintProperty(`radar-layer-${i}`, 'raster-opacity', i === currentIndex ? op : 0);
-            });
-            timestamp.innerText = frames[currentIndex].time;
-            timeSlider.value = currentIndex;
+            const op = parseFloat(document.getElementById('opacity-slider').value);
+            frames.forEach((_, i) => map.setPaintProperty(`layer-${i}`, 'raster-opacity', i === currentIndex ? op : 0));
+            document.getElementById('timestamp').innerText = frames[currentIndex].time;
+            document.getElementById('time-slider').value = currentIndex;
         }
 
-        function togglePlay() {
+        // Logic for Play/Pause and Sliders...
+        document.getElementById('play-btn').onclick = () => {
             isPlaying = !isPlaying;
-            playBtn.innerHTML = isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
-            if (isPlaying) animate();
-            else clearTimeout(playTimer);
-        }
+            document.getElementById('play-btn').innerHTML = isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
+            if(isPlaying) animate();
+        };
 
         function animate() {
-            if (!isPlaying) return;
-            let next = currentIndex + 1;
-            if (next >= frames.length) next = 0;
-            updateFrame(next);
-            const delay = 1200 - (speedSlider.value * 110);
-            playTimer = setTimeout(animate, delay);
+            if(!isPlaying) return;
+            currentIndex = (currentIndex + 1) % frames.length;
+            updateFrame(currentIndex);
+            setTimeout(animate, 1100 - (document.getElementById('speed-slider').value * 100));
         }
 
-        // Listeners
-        timeSlider.oninput = (e) => { isPlaying = false; playBtn.innerHTML = '<i class="fas fa-play"></i>'; updateFrame(e.target.value); };
-        opacitySlider.oninput = () => updateFrame(currentIndex);
-        playBtn.onclick = togglePlay;
+        document.getElementById('time-slider').oninput = (e) => { isPlaying = false; updateFrame(e.target.value); };
 
-        loadRadar();
+        init();
     </script>
 </body>
 </html>
