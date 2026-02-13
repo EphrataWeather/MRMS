@@ -85,7 +85,7 @@
             const currentPath = window.location.pathname;
             const baseDataPath = currentPath.includes('/public/') ? 'data' : 'public/data';
             
-            for (let i = 0; i < 10; i++) {
+            for (let i = 0; i < 14; i++) {
                 try {
                     const res = await fetch(`${baseDataPath}/metadata_${i}.json?t=${Date.now()}`);
                     if (!res.ok) continue;
