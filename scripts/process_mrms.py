@@ -138,9 +138,9 @@ def process_frame(index, rate_key, flag_keys):
         f_warp = ds_flag[list(ds_flag.data_vars)[0]].interp(latitude=target_lats, longitude=target_lons, method="nearest")
 
         # --- 3. MASKS ---
-        rain = r_warp.where(f_warp.isin([1, 2, 5, 7, 8]))
+        rain = r_warp.where(f_warp.isin([1, 2, 5, 7, 8, 10, 91, 96]))
         snow = r_warp.where(f_warp == 3)
-        ice  = r_warp.where(f_warp.isin([4, 6, 10]))
+        ice  = r_warp.where(f_warp.isin([4]))
 
         # --- 4. PLOTTING ---
         # Set figsize to exactly match pixels at 100 DPI
