@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Precision MRMS HD | Live</title>
+    <title>Precision MRMS | Live Radar</title>
     
     <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
     <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
@@ -16,7 +16,7 @@
         body { margin: 0; padding: 0; background: #010409; color: white; overflow: hidden; font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
 
-        /* --- TRIPLE CATEGORY LEGEND --- */
+        /* --- UPDATED LEGEND (HAIL FIX) --- */
         .legend-container {
             position: absolute; top: 20px; left: 20px;
             background: var(--bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
@@ -25,7 +25,8 @@
             box-shadow: 0 8px 32px rgba(0,0,0,0.5);
         }
         .legend-group { display: flex; flex-direction: column; gap: 4px; }
-        .legend-label { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #888; }
+        .legend-label { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #aaa; }
+        
         .color-strip { display: flex; height: 8px; border-radius: 2px; overflow: hidden; width: 120px; border: 1px solid rgba(255,255,255,0.05); }
         .color-block { flex: 1; height: 100%; }
 
@@ -56,7 +57,6 @@
         .sub-settings { display: flex; justify-content: space-between; gap: 15px; font-size: 11px; }
         .setting-group { display: flex; align-items: center; gap: 8px; flex: 1; }
 
-        /* Mapbox GPS Icon customization */
         .mapboxgl-ctrl-group { background: var(--bg) !important; border: 1px solid var(--border) !important; }
         .mapboxgl-ctrl-icon { filter: invert(1); }
     </style>
@@ -66,6 +66,7 @@
     <div id="map"></div>
 
     <div class="legend-container">
+        
         <div class="legend-group">
             <span class="legend-label">Rain</span>
             <div class="color-strip">
@@ -79,17 +80,15 @@
                 <div class="color-block" style="background:#910000"></div>
             </div>
         </div>
+
         <div class="legend-group">
-            <span class="legend-label">Mix</span>
+            <span class="legend-label" style="color:#d100d1;">Hail</span>
             <div class="color-strip">
-                <div class="color-block" style="background:#ff00ff"></div>
-                <div class="color-block" style="background:#d100d1"></div>
-                <div class="color-block" style="background:#910091"></div>
-                <div class="color-block" style="background:#4b0082"></div>
-            </div>
+                <div class="color-block" style="background:#ff00ff"></div> <div class="color-block" style="background:#d100d1"></div> <div class="color-block" style="background:#910091"></div> <div class="color-block" style="background:#4b0082"></div> </div>
         </div>
+
         <div class="legend-group">
-            <span class="legend-label">Snow</span>
+            <span class="legend-label" style="color:#00ffff;">Snow</span>
             <div class="color-strip">
                 <div class="color-block" style="background:#00ffff"></div>
                 <div class="color-block" style="background:#80ffff"></div>
@@ -102,7 +101,7 @@
 
     <div class="ui-card">
         <div class="header">
-            <div class="logo">MRMS • Live HD</div>
+            <div class="logo">MRMS • Live Radar</div>
             <div id="timestamp">SYNCING...</div>
         </div>
         <div class="control-grid">
@@ -118,7 +117,7 @@
     </div>
 
     <script>
-        const TOKEN = 'pk.eyJ1IjoiZ3RnMDExNiIsImEiOiJjbWxsODV6NXAwNThmM2ZwdWlkYm0xNjFlIn0.vI186twXYzY45nnuV5FucQ';
+        const TOKEN = 'YOUR_MAPBOX_TOKEN_HERE';
         mapboxgl.accessToken = TOKEN;
 
         const map = new mapboxgl.Map({
@@ -129,7 +128,6 @@
             projection: 'mercator'
         });
 
-        // GPS Control
         const geolocate = new mapboxgl.GeolocateControl({
             positionOptions: { enableHighAccuracy: true },
             trackUserLocation: true,
