@@ -153,7 +153,7 @@ def process_frame(index, rate_key, flag_keys):
         plot_args = dict(extent=extent, origin='upper', interpolation='none', aspect='auto')
         
         if np.nanmax(rain.values) > 0.1:
-            ax.imshow(rain.values, cmap=get_colormap('rain'), vmin=0.1, vmax=15, **plot_args)
+            ax.imshow(rain.values, cmap=get_colormap('rain'), vmin=0.1, vmax=20, **plot_args)
         if np.nanmax(snow.values) > 0.1:
             ax.imshow(snow.values, cmap=get_colormap('snow'), vmin=0.1, vmax=5, **plot_args)
         if np.nanmax(ice.values) > 0.1:
