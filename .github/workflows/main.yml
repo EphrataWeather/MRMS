@@ -1,9 +1,11 @@
 name: Update Weather Data
 
 on:
+  workflow_dispatch:      # Allows manual/external triggers
+  repository_dispatch:    # Allows API triggers
+    types: [update_radar] 
   schedule:
-    - cron: '*/10 * * * *'
-  workflow_dispatch:
+    - cron: '*/15 * * * *' # Keep this as a backup
 
 permissions:
   contents: write
