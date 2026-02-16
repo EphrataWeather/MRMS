@@ -1,8 +1,8 @@
 name: Update Radar Data
 on:
   schedule:
-    - cron: '*/5 * * * *' # Runs every 5 minutes
-  workflow_dispatch: # Allows manual trigger
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -10,6 +10,9 @@ jobs:
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v3
+
+      - name: List Files (Debug)
+        run: ls -R  # This helps you see if the file is in the wrong folder
 
       - name: Install System Dependencies
         run: |
@@ -26,6 +29,7 @@ jobs:
           pip install numpy matplotlib pygrib requests
 
       - name: Run Radar Processor
+        # Ensure this matches your filename exactly
         run: python process_radar.py
 
       - name: Commit and Push Changes
