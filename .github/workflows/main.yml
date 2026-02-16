@@ -32,7 +32,7 @@ jobs:
 
       - name: Install Python Dependencies
         run: |
-          pip install numpy xarray cfgrib matplotlib requests beautifulsoup4 pillow scipy
+          pip install numpy xarray cfgrib matplotlib requests beautifulsoup4 pillow scipy pyrgib
 
       - name: Rotate and Prepare Folders
         run: |
