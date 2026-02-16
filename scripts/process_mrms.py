@@ -10,8 +10,11 @@ import matplotlib.colors as mcolors
 import json
 
 # --- SETTINGS ---
+# Using relative paths for GitHub Actions
 OUTPUT_DIR = "public/data"
 TEMP_DIR = "temp"
+
+# Create directories if they don't exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 
@@ -31,7 +34,7 @@ def process_frame(dbz_array, flag_array, bounds, time_str):
     cmap_rain, cmap_mix, cmap_snow = get_smart_colormaps()
     norm = plt.Normalize(vmin=5, vmax=75)
     
-    # Logic Overrides (The Fix)
+    # Logic Overrides
     is_severe = (dbz_array > 45)
     mask_snow = (flag_array == 3) & (dbz_array > 10) & (~is_severe)
     mask_mix = ((flag_array == 6) | (flag_array == 7)) & (dbz_array > 10) & (~is_severe)
@@ -39,11 +42,13 @@ def process_frame(dbz_array, flag_array, bounds, time_str):
 
     h, w = dbz_array.shape
     rgba = np.zeros((h, w, 4))
-    rgba[mask_rain] = cmap_rain(norm(dbz_array[mask_rain]))
-    rgba[mask_mix] = cmap_mix(norm(dbz_array[mask_mix]))
-    rgba[mask_snow] = cmap_snow(norm(dbz_array[mask_snow]))
+    
+    # Efficient painting
+    if np.any(mask_rain): rgba[mask_rain] = cmap_rain(norm(dbz_array[mask_rain]))
+    if np.any(mask_mix):  rgba[mask_mix] = cmap_mix(norm(dbz_array[mask_mix]))
+    if np.any(mask_snow): rgba[mask_snow] = cmap_snow(norm(dbz_array[mask_snow]))
 
-    # Shift existing frames: master_13 -> master_14, master -> master_1
+    # Shift existing frames
     for i in range(13, -1, -1):
         old_name = "master" if i == 0 else f"master_{i}"
         new_name = f"master_{i+1}"
@@ -58,8 +63,8 @@ def process_frame(dbz_array, flag_array, bounds, time_str):
 
 def run():
     now = datetime.datetime.utcnow()
-    # Check slightly back in time to ensure NOAA has finished the upload
-    check_time = now - datetime.timedelta(minutes=6)
+    # Check 6-8 minutes back to ensure file availability
+    check_time = now - datetime.timedelta(minutes=8)
     time_str = check_time.strftime("%Y%m%d-%H%M00")
     
     base_url = "https://mrms.ncep.noaa.gov/data/2D"
@@ -72,28 +77,35 @@ def run():
     for key, url in urls.items():
         local_gz = f"{TEMP_DIR}/{key}.gz"
         local_grib = f"{TEMP_DIR}/{key}.grib2"
-        r = requests.get(url, timeout=15)
-        if r.status_code != 200:
-            print(f"Skipping: {key} not ready.")
+        try:
+            r = requests.get(url, timeout=20)
+            if r.status_code != 200:
+                print(f"File not found on NOAA server: {key} ({time_str})")
+                return
+            with open(local_gz, 'wb') as f: f.write(r.content)
+            with gzip.open(local_gz, 'rb') as f_in, open(local_grib, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+            files[key] = local_grib
+        except Exception as e:
+            print(f"Error downloading {key}: {e}")
             return
-        with open(local_gz, 'wb') as f: f.write(r.content)
-        with gzip.open(local_gz, 'rb') as f_in, open(local_grib, 'wb') as f_out:
-            shutil.copyfileobj(f_in, f_out)
-        files[key] = local_grib
 
-    # Read Data
-    with pygrib.open(files['dbz']) as gb:
-        msg = gb[1]
-        dbz = msg.values
-        lats, lons = msg.latlons()
-    with pygrib.open(files['flag']) as gb:
-        flag = gb[1].values
+    # Read Data using pygrib
+    try:
+        with pygrib.open(files['dbz']) as gb:
+            msg = gb[1]
+            dbz = msg.values
+            lats, lons = msg.latlons()
+        with pygrib.open(files['flag']) as gb:
+            flag = gb[1].values
 
-    bounds = [[float(lats.min()), float(lons.min())], [float(lats.max()), float(lons.max())]]
-    display_time = check_time.strftime("%I:%M %p UTC")
-    
-    process_frame(dbz, flag, bounds, display_time)
-    print(f"Successfully updated radar for {display_time}")
+        bounds = [[float(lats.min()), float(lons.min())], [float(lats.max()), float(lons.max())]]
+        display_time = check_time.strftime("%I:%M %p UTC")
+        
+        process_frame(dbz, flag, bounds, display_time)
+        print(f"Successfully updated radar for {display_time}")
+    except Exception as e:
+        print(f"Error processing GRIB data: {e}")
 
 if __name__ == "__main__":
     run()
