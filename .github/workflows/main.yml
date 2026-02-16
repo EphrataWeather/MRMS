@@ -1,41 +1,58 @@
-name: Update Radar Data
+name: Update Weather Data
+
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/10 * * * *'
   workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v3
-
-      - name: List Files (Debug)
-        run: ls -R  # This helps you see if the file is in the wrong folder
-
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libeccodes-dev
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev
+
       - name: Install Python Dependencies
         run: |
-          pip install numpy matplotlib pygrib requests
+          pip install numpy xarray cfgrib matplotlib requests beautifulsoup4 pillow scipy
 
-      - name: Run Radar Processor
-        # Ensure this matches your filename exactly
-        run: python process_radar.py
-
-      - name: Commit and Push Changes
+      - name: Rotate and Prepare Folders
         run: |
-          git config --global user.name "GitHub Action"
-          git config --global user.email "action@github.com"
-          git add public/data/*.png public/data/*.json
-          git commit -m "Update radar frames [skip ci]" || exit 0
-          git push
+          mkdir -p public/data
+          # Rotate existing files if metadata_0 exists
+          if [ -f "public/data/metadata_0.json" ]; then
+            for i in {8..0}; do
+              next=$((i+1))
+              [ -f "public/data/master_$i.png" ] && mv "public/data/master_$i.png" "public/data/master_$next.png" || true
+              [ -f "public/data/metadata_$i.json" ] && mv "public/data/metadata_$i.json" "public/data/metadata_$next.json" || true
+              if [ $i -eq 0 ] && [ -f "public/data/master.png" ]; then
+                mv "public/data/master.png" "public/data/master_1.png"
+              fi
+            done
+          fi
+
+      - name: Run Processing Script
+        run: python scripts/process_mrms.py
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name "weather-bot"
+          git config --global user.email "bot@weather.com"
+          git add public/data/*
+          git commit -m "Update radar: $(date)" || echo "No changes"
+          git push origin main
