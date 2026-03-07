@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap, LogNorm
+from matplotlib.colors import ListedColormap, BoundaryNorm
 from datetime import datetime, timezone, timedelta
 import pytz
 import gc
@@ -76,12 +76,67 @@ def get_cmap_norm(p_type):
     return cmap, norm
 
 # --- HRRR PRECIP TYPE (model-based, avoids radar artefacts) ---
-# HRRR categorical precip (CRAIN/CSNOW/CICEP/CFRZR) is fetched via the NCEP
-# NOMADS subregion filter — only the 4 surface fields for our bounding box,
-# so the download is a few KB rather than the full 200 MB HRRR file.
+# HRRR categorical precip (CRAIN/CSNOW/CICEP/CFRZR) is fetched from the
+# NOAA HRRR AWS S3 bucket using byte-range requests against the .idx index
+# file, so we download only the 4 surface fields (~few KB) rather than the
+# full 200 MB HRRR file.  NOMADS is no longer used.
 # Results are cached per HRRR analysis hour to avoid redundant downloads.
 
+HRRR_BUCKET = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com"
+
 _hrrr_cache = {}  # cache key: YYYYMMDDHH string
+
+def _fetch_hrrr_vars_s3(date_str, hour_str, hours_back):
+    """
+    Download CRAIN/CSNOW/CICEP/CFRZR from the HRRR S3 archive using byte-range
+    requests derived from the companion .idx file.  Returns the local temp
+    filename on success, or raises on failure.
+    """
+    import cfgrib  # noqa: F401 – imported here to keep top-level imports light
+
+    base_url = (
+        f"{HRRR_BUCKET}/hrrr.{date_str}/conus"
+        f"/hrrr.t{hour_str}z.wrfsfcf00.grib2"
+    )
+    idx_url = base_url + ".idx"
+
+    resp = session.get(idx_url, timeout=15)
+    if resp.status_code != 200:
+        raise ValueError(f"idx fetch failed: HTTP {resp.status_code}")
+
+    # Parse .idx lines: "msgnum:byteoffset:d=YYYYMMDDHH:VARNAME:level:anl:"
+    target_vars = {'CRAIN', 'CSNOW', 'CICEP', 'CFRZR'}
+    lines = resp.text.strip().split('\n')
+    ranges = []
+    for i, line in enumerate(lines):
+        parts = line.split(':')
+        if len(parts) < 4:
+            continue
+        var_name = parts[3]
+        if var_name in target_vars:
+            start = int(parts[1])
+            # End byte = start of next message − 1 (last message: read to EOF)
+            end = int(lines[i + 1].split(':')[1]) - 1 if i + 1 < len(lines) else ''
+            ranges.append((var_name, start, end))
+
+    if not ranges:
+        raise ValueError("No CRAIN/CSNOW/CICEP/CFRZR found in .idx")
+
+    # Download each variable's byte range and concatenate into one GRIB2 file.
+    # GRIB2 is a message-based format so concatenation is safe.
+    fname = f"hrrr_cat_{hours_back}.grib2"
+    with open(fname, 'wb') as f_out:
+        for var_name, start, end in ranges:
+            rng_header = f"bytes={start}-{end}" if end != '' else f"bytes={start}-"
+            r = session.get(base_url, headers={'Range': rng_header}, timeout=30)
+            if r.status_code not in (200, 206):
+                raise ValueError(
+                    f"Range request failed for {var_name}: HTTP {r.status_code}"
+                )
+            f_out.write(r.content)
+
+    return fname
+
 
 def get_hrrr_precip_type(target_dt, tgt_lats_2d, tgt_lons_2d):
     """
@@ -107,28 +162,11 @@ def get_hrrr_precip_type(target_dt, tgt_lats_2d, tgt_lons_2d):
         date_str = run_dt.strftime('%Y%m%d')
         hour_str = run_dt.strftime('%H')
 
-        # NOMADS subregion filter: downloads only CRAIN/CSNOW/CICEP/CFRZR at
-        # surface for our lat/lon bounding box (~few KB instead of ~200 MB).
-        url = (
-            "https://nomads.ncep.noaa.gov/cgi-bin/filter_hrrr_2d.pl"
-            f"?file=hrrr.t{hour_str}z.wrfsfcf00.grib2"
-            f"&dir=%2Fhrrr.{date_str}%2Fconus"
-            "&var_CRAIN=on&var_CSNOW=on&var_CICEP=on&var_CFRZR=on"
-            "&lev_surface=on"
-            f"&subregion=&leftlon={LON_LEFT}&rightlon={LON_RIGHT}"
-            f"&toplat={LAT_TOP}&bottomlat={LAT_BOT}"
-        )
-
-        fname  = f"hrrr_cat_{hours_back}.grib2"
+        fname  = None
         all_ds = []
         try:
-            resp = session.get(url, timeout=45)
-            if resp.status_code != 200 or len(resp.content) < 500:
-                continue
-            with open(fname, 'wb') as f:
-                f.write(resp.content)
+            fname = _fetch_hrrr_vars_s3(date_str, hour_str, hours_back)
 
-            # cfgrib may split 4 categorical variables into separate datasets
             import cfgrib
             all_ds = cfgrib.open_datasets(fname, backend_kwargs={'indexpath': ''})
 
@@ -178,21 +216,21 @@ def get_hrrr_precip_type(target_dt, tgt_lats_2d, tgt_lons_2d):
 
             for ds in all_ds:
                 ds.close()
-            if os.path.exists(fname):
+            if fname and os.path.exists(fname):
                 os.remove(fname)
 
-            print(f"  HRRR precip type: {hour_str}z (t-{hours_back}h)")
+            print(f"  HRRR precip type (S3): {hour_str}z (t-{hours_back}h)")
             _hrrr_cache[cache_key] = result
             return result
 
         except Exception as e:
-            print(f"  HRRR t-{hours_back}h failed: {e}")
+            print(f"  HRRR S3 t-{hours_back}h failed: {e}")
             for ds in all_ds:
                 try:
                     ds.close()
                 except Exception:
                     pass
-            if os.path.exists(fname):
+            if fname and os.path.exists(fname):
                 os.remove(fname)
 
     print("  HRRR unavailable — using MRMS PrecipFlag + safeguards")
@@ -329,6 +367,8 @@ def process_frame(index, rate_key, flag_keys):
         snow = r_warp.where(f_warp.isin([3, 4]))
         ice  = r_warp.where(f_warp.isin([5, 6]))
 
+        hrrr = get_hrrr_precip_type(utc_dt, tgt_lats_2d, tgt_lons_2d)
+
         if hrrr is not None:
             has_precip = rate_vals > 0.1
 
@@ -387,23 +427,18 @@ def process_frame(index, rate_key, flag_keys):
 
         extent    = [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP]
         plot_args = dict(extent=extent, origin='upper', interpolation='none', aspect='auto')
-        
-        # Log-scale norms: keeps light drizzle green/yellow, heavy cores red,
-        # and extreme convection/hail dark red — matching the dBZ perception
-        # that radar users expect (linear vmax=15 crushed everything to dark red).
-        rain_norm = LogNorm(vmin=0.1, vmax=75)
-        wint_norm = LogNorm(vmin=0.1, vmax=10)
 
-        rain_vals = rain.values
-        snow_vals = snow.values
-        ice_vals  = ice.values
+        rain_cmap, rain_norm = get_cmap_norm('rain')
+        snow_cmap, snow_norm = get_cmap_norm('snow')
+        ice_cmap,  ice_norm  = get_cmap_norm('ice')
 
-        if np.any(rain_vals > 0.1):
-            ax.imshow(rain_vals, cmap=get_colormap('rain'), norm=rain_norm, **plot_args)
-        if np.any(snow_vals > 0.1):
-            ax.imshow(snow_vals, cmap=get_colormap('snow'), norm=wint_norm, **plot_args)
-        if np.any(ice_vals > 0.1):
-            ax.imshow(ice_vals, cmap=get_colormap('ice'),  norm=wint_norm, **plot_args)
+        # rain/snow/ice are already plain numpy arrays from np.where()
+        if np.any(rain > 0.1):
+            ax.imshow(rain, cmap=rain_cmap, norm=rain_norm, **plot_args)
+        if np.any(snow > 0.1):
+            ax.imshow(snow, cmap=snow_cmap, norm=snow_norm, **plot_args)
+        if np.any(ice > 0.1):
+            ax.imshow(ice,  cmap=ice_cmap,  norm=ice_norm,  **plot_args)
 
         img_name = "master.png" if index == 0 else f"master_{index}.png"
         plt.savefig(os.path.join(OUTPUT_DIR, img_name), transparent=True, pad_inches=0)
