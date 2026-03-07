@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import ListedColormap, LogNorm
 from datetime import datetime, timezone, timedelta
 import pytz
 import gc
@@ -138,9 +138,19 @@ def process_frame(index, rate_key, flag_keys):
         f_warp = ds_flag[list(ds_flag.data_vars)[0]].interp(latitude=target_lats, longitude=target_lons, method="nearest")
 
         # --- 3. MASKS ---
-        rain = r_warp.where(f_warp.isin([1, 6, 91, 96]))
-        snow = r_warp.where(f_warp.isin([3]))
-        ice  = r_warp.where(f_warp.isin([7, 10]))
+        # PrecipFlag categorical values:
+        #  1 = Rain (warm stratiform)
+        #  2 = Rain + hail / convective rain
+        #  3 = Snow
+        #  4 = Wet snow
+        #  5 = Sleet / ice pellets
+        #  6 = Freezing rain / drizzle
+        #  7 = Unknown / indeterminate type  (NOT ice — omit to avoid false wintry-mix)
+        # 10 = No classification (bright-band artifact, chaff, etc. — omit)
+        # 91/96 = Multi-sensor / radar-only QPE rain estimates
+        rain = r_warp.where(f_warp.isin([1, 2, 91, 96]))
+        snow = r_warp.where(f_warp.isin([3, 4]))
+        ice  = r_warp.where(f_warp.isin([5, 6]))
 
         # --- 4. PLOTTING ---
         # Set figsize to exactly match pixels at 100 DPI
@@ -152,12 +162,22 @@ def process_frame(index, rate_key, flag_keys):
         # aspect='auto' lets the pixels fill our pre-calculated warped container
         plot_args = dict(extent=extent, origin='upper', interpolation='none', aspect='auto')
         
-        if np.nanmax(rain.values) > 0.1:
-            ax.imshow(rain.values, cmap=get_colormap('rain'), vmin=0.1, vmax=15, **plot_args)
-        if np.nanmax(snow.values) > 0.1:
-            ax.imshow(snow.values, cmap=get_colormap('snow'), vmin=0.1, vmax=5, **plot_args)
-        if np.nanmax(ice.values) > 0.1:
-            ax.imshow(ice.values, cmap=get_colormap('ice'), vmin=0.1, vmax=5, **plot_args)
+        # Log-scale norms: keeps light drizzle green/yellow, heavy cores red,
+        # and extreme convection/hail dark red — matching the dBZ perception
+        # that radar users expect (linear vmax=15 crushed everything to dark red).
+        rain_norm = LogNorm(vmin=0.1, vmax=75)
+        wint_norm = LogNorm(vmin=0.1, vmax=10)
+
+        rain_vals = rain.values
+        snow_vals = snow.values
+        ice_vals  = ice.values
+
+        if np.any(rain_vals > 0.1):
+            ax.imshow(rain_vals, cmap=get_colormap('rain'), norm=rain_norm, **plot_args)
+        if np.any(snow_vals > 0.1):
+            ax.imshow(snow_vals, cmap=get_colormap('snow'), norm=wint_norm, **plot_args)
+        if np.any(ice_vals > 0.1):
+            ax.imshow(ice_vals, cmap=get_colormap('ice'),  norm=wint_norm, **plot_args)
 
         img_name = "master.png" if index == 0 else f"master_{index}.png"
         plt.savefig(os.path.join(OUTPUT_DIR, img_name), transparent=True, pad_inches=0)
