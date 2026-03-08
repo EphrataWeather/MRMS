@@ -53,12 +53,27 @@ def merc_to_lat(y):
 # These explicit boundaries keep green through ~6 mm/hr, matching what users
 # see on Weather.gov and other MRMS platforms.
 
-RAIN_BOUNDS = [0.1, 0.3, 1.0, 3.0, 6.0, 12.0, 25.0, 50.0, 100.0]  # mm/hr (8 intervals)
-SNOW_BOUNDS = [0.1, 0.3, 0.5, 1.0, 2.5,  6.0]                       # mm/hr (5 intervals)
-ICE_BOUNDS  = [0.1, 0.3, 0.5, 1.0, 2.5,  6.0]                       # mm/hr (5 intervals)
+RAIN_BOUNDS = [0.1, 0.5, 1.5, 3.0, 5.1, 12.7, 25.4, 38.1, 50.8, 76.2, 127.0]  # mm/hr (10 intervals)
+# Key breakpoints (inches/hr → mm/hr): 0.2→5.1, 1.0→25.4, 2.0→50.8
+# Greens   : 0.1 – 5.1  mm/hr  (up to 0.2 in/hr)
+# Yellows  : 5.1 – 25.4 mm/hr  (0.2 – 1.0 in/hr)
+# Oranges  : 25.4 – 50.8 mm/hr (1.0 – 2.0 in/hr)
+# Reds     : > 50.8 mm/hr       (> 2.0 in/hr)
+SNOW_BOUNDS = [0.1, 0.3, 0.5, 1.0, 2.5,  6.0]                        # mm/hr (5 intervals)
+ICE_BOUNDS  = [0.1, 0.3, 0.5, 1.0, 2.5,  6.0]                        # mm/hr (5 intervals)
 
-RAIN_COLORS = ['#00fb90', '#00bb00', '#008800', '#ffff00', '#ff9100',
-               '#ff0000', '#d20000', '#910000']
+RAIN_COLORS = [
+    '#00fb90',  # 0.1  – 0.5   mm/hr : mint / light green
+    '#00cc00',  # 0.5  – 1.5   mm/hr : medium-light green
+    '#009900',  # 1.5  – 3.0   mm/hr : medium green
+    '#006600',  # 3.0  – 5.1   mm/hr : dark green  (last green, < 0.2 in/hr)
+    '#ffff00',  # 5.1  – 12.7  mm/hr : bright yellow  (0.2 – 0.5 in/hr)
+    '#ffcc00',  # 12.7 – 25.4  mm/hr : amber / dark yellow  (0.5 – 1.0 in/hr)
+    '#ff9100',  # 25.4 – 38.1  mm/hr : orange  (1.0 – 1.5 in/hr)
+    '#ff5500',  # 38.1 – 50.8  mm/hr : red-orange  (1.5 – 2.0 in/hr)
+    '#ff0000',  # 50.8 – 76.2  mm/hr : red  (2.0 – 3.0 in/hr)
+    '#cc0000',  # 76.2 – 127   mm/hr : dark red  (> 3.0 in/hr)
+]
 SNOW_COLORS = ['#00ffff', '#80ffff', '#ffffff', '#adc5ff', '#5a82ff']
 ICE_COLORS  = ['#ff00ff', '#d100d1', '#910091', '#4b0082', '#2d004b']
 
@@ -360,8 +375,8 @@ def process_frame(index, rate_key, flag_keys):
         #  4 = Wet snow
         #  5 = Sleet / ice pellets
         #  6 = Freezing rain / drizzle
-        #  7 = Unknown / indeterminate type  (NOT ice — omit to avoid false wintry-mix)
-        # 10 = No classification (bright-band artifact, chaff, etc. — omit)
+        #  7 = Unknown / indeterminate type  → rain when measurable rate present
+        # 10 = No classification (bright-band artifact, chaff, etc.) → rain when rate present
         # 91/96 = Multi-sensor / radar-only QPE rain estimates
         rain = r_warp.where(f_warp.isin([1, 2, 91, 96]))
         snow = r_warp.where(f_warp.isin([3, 4]))
@@ -385,6 +400,26 @@ def process_frame(index, rate_key, flag_keys):
                 rain_mask |= fallback & np.isin(flag_vals, [1, 2, 91, 96])
                 snow_mask |= fallback & np.isin(flag_vals, [3])
                 ice_mask  |= fallback & np.isin(flag_vals, [4, 5, 6])
+                # flag 7 (unknown) and 10 (no classification) with measurable rate
+                # are almost always rain inside storm interiors — include them.
+                rain_mask |= fallback & np.isin(flag_vals, [7, 10])
+
+            # MRMS radar-detected rain+hail (flag 2) is definitively not wintry:
+            # override HRRR ice/snow classification for those pixels.  The MRMS
+            # dual-pol algorithm directly identifies convective/hail signatures,
+            # which the HRRR model cannot reliably resolve.
+            mrms_rain_hail = np.isin(flag_vals, [2]) & has_precip
+            ice_mask  &= ~mrms_rain_hail
+            snow_mask &= ~mrms_rain_hail
+            rain_mask |=  mrms_rain_hail
+
+            # Catch-all: any pixel with measurable rate that still has no type
+            # (e.g. storm-interior holes where HRRR grid doesn't cover and the
+            # MRMS flag is something exotic) → rain.  This ensures storm cores
+            # never appear as transparent gaps.
+            still_untyped = has_precip & ~(rain_mask | snow_mask | ice_mask)
+            rain_mask |= still_untyped
+
         else:
             # Fallback: MRMS PrecipFlag with enhanced safeguards
             #
@@ -398,12 +433,17 @@ def process_frame(index, rate_key, flag_keys):
             #            contamination.  Other MRMS platforms show it as mix.
             #   5      = Sleet / ice pellets
             #   6      = Freezing rain / drizzle
-            #   7, 10  = Unknown / no classification — excluded to avoid false
-            #            wintry-mix pixels
+            #   7, 10  = Unknown / no classification — treated as rain when a
+            #            measurable rate exists (fills storm-interior gaps).
             #  91, 96  = Multi-sensor / radar-only QPE rain estimates
+            has_precip = rate_vals > 0.1
             rain_mask = np.isin(flag_vals, [1, 2, 91, 96])
             snow_mask = np.isin(flag_vals, [3])           # pure dry snow only
             ice_mask  = np.isin(flag_vals, [4, 5, 6])    # wet snow + sleet + frzr
+            # Pixels with a valid rate but unknown/unclassified flag → rain.
+            # This is the dominant cause of gaps inside convective storm cells.
+            untyped_with_rate = has_precip & np.isin(flag_vals, [7, 10])
+            rain_mask |= untyped_with_rate
 
         # --- 4. RATE SAFEGUARD (applied regardless of classification source) ---
         # Real snow: typically < 5 mm/hr liquid equivalent.
