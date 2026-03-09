@@ -59,6 +59,25 @@
         /* Mapbox GPS Icon customization */
         .mapboxgl-ctrl-group { background: var(--bg) !important; border: 1px solid var(--border) !important; }
         .mapboxgl-ctrl-icon { filter: invert(1); }
+
+        /* --- MAP TYPE SELECTOR --- */
+        .map-type-selector {
+            display: flex; gap: 6px; margin-top: 14px;
+            border-top: 1px solid var(--border); padding-top: 14px;
+        }
+        .map-type-btn {
+            flex: 1; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--border);
+            background: rgba(255,255,255,0.05); color: #aaa; cursor: pointer;
+            font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 600;
+            letter-spacing: 0.5px; text-transform: uppercase; text-align: center;
+            transition: background 0.2s, color 0.2s, border-color 0.2s;
+            white-space: nowrap;
+        }
+        .map-type-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+        .map-type-btn.active {
+            background: rgba(0, 242, 255, 0.15); color: var(--accent);
+            border-color: var(--accent);
+        }
     </style>
 </head>
 <body>
@@ -115,15 +134,28 @@
                 </div>
             </div>
         </div>
+        <div class="map-type-selector">
+            <button class="map-type-btn" data-type="satellite-streets">Satellite+Streets</button>
+            <button class="map-type-btn" data-type="outdoors">Outdoors</button>
+            <button class="map-type-btn" data-type="streets">Streets</button>
+        </div>
     </div>
 
     <script>
         const TOKEN = 'pk.eyJ1IjoiZ3RnMDExNiIsImEiOiJjbWxsODV6NXAwNThmM2ZwdWlkYm0xNjFlIn0.vI186twXYzY45nnuV5FucQ';
         mapboxgl.accessToken = TOKEN;
 
+        const MAP_STYLES = {
+            'satellite-streets': 'mapbox://styles/mapbox/satellite-streets-v12',
+            'outdoors': 'mapbox://styles/mapbox/outdoors-v12',
+            'streets': 'mapbox://styles/mapbox/streets-v12'
+        };
+
+        const savedMapType = localStorage.getItem('mrms-map-type') || 'satellite-streets';
+
         const map = new mapboxgl.Map({
             container: 'map',
-            style: 'mapbox://styles/mapbox/dark-v11',
+            style: MAP_STYLES[savedMapType],
             center: [-98, 38],
             zoom: 3.8,
             projection: 'mercator'
@@ -258,6 +290,28 @@
                 map.setPaintProperty('radar-layer', 'raster-opacity', parseFloat(e.target.value));
             }
         };
+
+        function setActiveMapTypeBtn(type) {
+            document.querySelectorAll('.map-type-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.type === type);
+            });
+        }
+
+        function switchMapType(type) {
+            if (!MAP_STYLES[type]) return;
+            localStorage.setItem('mrms-map-type', type);
+            setActiveMapTypeBtn(type);
+            map.setStyle(MAP_STYLES[type]);
+            map.once('style.load', () => {
+                if (frames.length > 0) setupRadar();
+            });
+        }
+
+        document.querySelectorAll('.map-type-btn').forEach(btn => {
+            btn.onclick = () => switchMapType(btn.dataset.type);
+        });
+
+        setActiveMapTypeBtn(savedMapType);
 
         init();
     </script>
