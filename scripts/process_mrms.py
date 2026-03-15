@@ -28,7 +28,10 @@ FLAG_PREFIX = "CONUS/PrecipFlag_00.00"
 # Real snowfall tops out ~5 mm/hr liquid; real ice pellets ~8 mm/hr.
 # Anything above this threshold is almost certainly misclassified hail or
 # heavy convective rain — force those pixels to the rain layer.
-WINTRY_RATE_MAX = 15.0  # mm/hr
+WINTRY_RATE_MAX = 15.0  # mm/hr (internal threshold, raw data units)
+
+# Unit conversion: all display values are in inches
+MM_TO_IN = 1.0 / 25.4
 
 # --- SESSION SETUP ---
 session = requests.Session()
@@ -46,33 +49,22 @@ def merc_to_lat(y):
     """Converts normalised Mercator Y back to latitude."""
     return np.degrees(2 * np.arctan(np.exp(y)) - np.pi / 2)
 
-# --- COLOR TABLES ---
-# BoundaryNorm with explicit mm/hr breaks calibrated to match NWS / standard
-# MRMS viewers.  The old LogNorm(vmin=0.1, vmax=75) compressed the lower end of
-# the scale so that moderate rain (3–6 mm/hr) rendered as heavy-orange/red.
-# These explicit boundaries keep green through ~6 mm/hr, matching what users
-# see on Weather.gov and other MRMS platforms.
-
-RAIN_BOUNDS = [0.1, 0.5, 1.5, 3.0, 5.1, 12.7, 25.4, 38.1, 50.8, 76.2, 127.0]  # mm/hr (10 intervals)
-# Key breakpoints (inches/hr → mm/hr): 0.2→5.1, 1.0→25.4, 2.0→50.8
-# Greens   : 0.1 – 5.1  mm/hr  (up to 0.2 in/hr)
-# Yellows  : 5.1 – 25.4 mm/hr  (0.2 – 1.0 in/hr)
-# Oranges  : 25.4 – 50.8 mm/hr (1.0 – 2.0 in/hr)
-# Reds     : > 50.8 mm/hr       (> 2.0 in/hr)
-SNOW_BOUNDS = [0.1, 0.3, 0.5, 1.0, 2.5,  6.0]                        # mm/hr (5 intervals)
-ICE_BOUNDS  = [0.1, 0.3, 0.5, 1.0, 2.5,  6.0]                        # mm/hr (5 intervals)
+# --- COLOR TABLES: PRECIPITATION RATE (all bounds in in/hr) ---
+RAIN_BOUNDS = [0.01, 0.02, 0.06, 0.12, 0.20, 0.50, 1.00, 1.50, 2.00, 3.00, 5.00]  # in/hr
+SNOW_BOUNDS = [0.004, 0.01, 0.02, 0.04, 0.10, 0.24]                                 # in/hr
+ICE_BOUNDS  = [0.004, 0.01, 0.02, 0.04, 0.10, 0.24]                                 # in/hr
 
 RAIN_COLORS = [
-    '#00fb90',  # 0.1  – 0.5   mm/hr : mint / light green
-    '#00cc00',  # 0.5  – 1.5   mm/hr : medium-light green
-    '#009900',  # 1.5  – 3.0   mm/hr : medium green
-    '#006600',  # 3.0  – 5.1   mm/hr : dark green  (last green, < 0.2 in/hr)
-    '#ffff00',  # 5.1  – 12.7  mm/hr : bright yellow  (0.2 – 0.5 in/hr)
-    '#ffcc00',  # 12.7 – 25.4  mm/hr : amber / dark yellow  (0.5 – 1.0 in/hr)
-    '#ff9100',  # 25.4 – 38.1  mm/hr : orange  (1.0 – 1.5 in/hr)
-    '#ff5500',  # 38.1 – 50.8  mm/hr : red-orange  (1.5 – 2.0 in/hr)
-    '#ff0000',  # 50.8 – 76.2  mm/hr : red  (2.0 – 3.0 in/hr)
-    '#cc0000',  # 76.2 – 127   mm/hr : dark red  (> 3.0 in/hr)
+    '#00fb90',  # 0.01 – 0.02  in/hr : mint / light green
+    '#00cc00',  # 0.02 – 0.06  in/hr : medium-light green
+    '#009900',  # 0.06 – 0.12  in/hr : medium green
+    '#006600',  # 0.12 – 0.20  in/hr : dark green
+    '#ffff00',  # 0.20 – 0.50  in/hr : bright yellow
+    '#ffcc00',  # 0.50 – 1.00  in/hr : amber
+    '#ff9100',  # 1.00 – 1.50  in/hr : orange
+    '#ff5500',  # 1.50 – 2.00  in/hr : red-orange
+    '#ff0000',  # 2.00 – 3.00  in/hr : red
+    '#cc0000',  # 3.00 – 5.00  in/hr : dark red
 ]
 SNOW_COLORS = ['#00ffff', '#80ffff', '#ffffff', '#adc5ff', '#5a82ff']
 ICE_COLORS  = ['#ff00ff', '#d100d1', '#910091', '#4b0082', '#2d004b']
@@ -90,24 +82,138 @@ def get_cmap_norm(p_type):
     cmap.set_bad(alpha=0)  # NaN → fully transparent
     return cmap, norm
 
-# --- HRRR PRECIP TYPE (model-based, avoids radar artefacts) ---
-# HRRR categorical precip (CRAIN/CSNOW/CICEP/CFRZR) is fetched from the
-# NOAA HRRR AWS S3 bucket using byte-range requests against the .idx index
-# file, so we download only the 4 surface fields (~few KB) rather than the
-# full 200 MB HRRR file.  NOMADS is no longer used.
-# Results are cached per HRRR analysis hour to avoid redundant downloads.
+# --- COLOR TABLES: SINGLE-FIELD PRODUCTS ---
+# Each entry: prefix, bounds (N+1 values for N color intervals), colors (N values),
+# min_val (display threshold), max_val (fill-value cap).
+# Optional 'conversion': multiply raw GRIB2 value (mm) by this factor before
+# applying bounds/min_val/max_val. Use MM_TO_IN (1/25.4) for inch-display products.
+SINGLE_PRODUCTS = {
+    'mesh': {
+        'prefix': 'CONUS/MESH_00.50',
+        'bounds': [0.25, 0.50, 0.75, 1.00, 1.50, 1.75, 2.00, 2.50, 3.00],  # inches hail diameter
+        'colors': [
+            '#c8f500',  # 0.25–0.50 in (~pea)     : lime-yellow
+            '#ffff00',  # 0.50–0.75 in (~marble)   : bright yellow
+            '#ffd700',  # 0.75–1.00 in             : gold
+            '#ff8c00',  # 1.00–1.50 in (~quarter)  : dark orange
+            '#ff4500',  # 1.50–1.75 in             : red-orange
+            '#ff0000',  # 1.75–2.00 in (~golf ball): red
+            '#cc0000',  # 2.00–2.50 in             : dark red
+            '#7f0000',  # 2.50–3.00 in (~baseball) : deep red
+        ],
+        'min_val': 0.20,   # inches (~5 mm)
+        'max_val': 8.0,    # inches (~200 mm fill-value cap)
+        'conversion': MM_TO_IN,
+        'label': 'Max Estimated Hail Size (in)',
+    },
+    'qpe6h': {
+        'prefix': 'CONUS/RadarOnly_QPE_06H_00.00',
+        'bounds': [0.05, 0.25, 0.50, 1.00, 2.00, 3.00, 4.00, 6.00, 8.00],  # inches accumulated
+        'colors': [
+            '#00fb90',  # 0.05–0.25 in : mint
+            '#00cc00',  # 0.25–0.50 in : green
+            '#009900',  # 0.50–1.00 in : medium green
+            '#006600',  # 1.00–2.00 in : dark green
+            '#ffff00',  # 2.00–3.00 in : yellow
+            '#ffcc00',  # 3.00–4.00 in : amber
+            '#ff9100',  # 4.00–6.00 in : orange
+            '#ff0000',  # 6.00–8.00 in : red
+        ],
+        'min_val': 0.04,   # inches (~1 mm)
+        'max_val': 40.0,   # inches (~1000 mm fill-value cap)
+        'conversion': MM_TO_IN,
+        'label': '6-Hour QPE (in)',
+    },
+    'qpe24h': {
+        'prefix': 'CONUS/RadarOnly_QPE_24H_00.00',
+        'bounds': [0.25, 1.00, 2.00, 3.00, 4.00, 6.00, 8.00, 12.00, 16.00],  # inches accumulated
+        'colors': [
+            '#00fb90',  # 0.25–1.00 in  : mint
+            '#00cc00',  # 1.00–2.00 in  : green
+            '#009900',  # 2.00–3.00 in  : medium green
+            '#006600',  # 3.00–4.00 in  : dark green
+            '#ffff00',  # 4.00–6.00 in  : yellow
+            '#ffcc00',  # 6.00–8.00 in  : amber
+            '#ff9100',  # 8.00–12.00 in : orange
+            '#ff0000',  # 12.0–16.00 in : red
+        ],
+        'min_val': 0.20,   # inches (~5 mm)
+        'max_val': 80.0,   # inches (~2000 mm fill-value cap)
+        'conversion': MM_TO_IN,
+        'label': '24-Hour QPE (in)',
+    },
+    'refl': {
+        'prefix': 'CONUS/MergedBaseReflectivity_00.50',
+        'bounds': [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 75],  # dBZ
+        'colors': [
+            '#646464',  # 0-5  dBZ : dark gray
+            '#04e9e7',  # 5-10      : cyan
+            '#019ff4',  # 10-15     : light blue
+            '#0300f4',  # 15-20     : blue
+            '#02fd02',  # 20-25     : bright green
+            '#01c501',  # 25-30     : green
+            '#008e00',  # 30-35     : dark green
+            '#fdf802',  # 35-40     : yellow
+            '#e5bc00',  # 40-45     : amber
+            '#fd9500',  # 45-50     : orange
+            '#fd0000',  # 50-55     : red
+            '#d40000',  # 55-60     : dark red
+            '#bc0000',  # 60-65     : darker red
+            '#f800fd',  # 65-75     : magenta
+        ],
+        'min_val': 0.0,
+        'max_val': 80.0,
+        'label': 'Base Reflectivity (dBZ)',
+    },
+    'lightning': {
+        'prefix': 'CONUS/LightningProbabilityNext60minGrid_scale_1',
+        'bounds': [5, 10, 20, 30, 40, 50, 60, 75, 90],  # percent probability
+        'colors': [
+            '#ffffb2',  # 5-10%  : pale yellow
+            '#fed976',  # 10-20% : light yellow-orange
+            '#feb24c',  # 20-30% : orange
+            '#fd8d3c',  # 30-40% : darker orange
+            '#fc4e2a',  # 40-50% : red-orange
+            '#e31a1c',  # 50-60% : red
+            '#bd0026',  # 60-75% : dark red
+            '#800026',  # 75-90% : deep red
+        ],
+        'min_val': 5.0,
+        'max_val': 100.0,
+        'label': '1-Hr CG Lightning Probability (%)',
+    },
+    'rotation': {
+        'prefix': 'CONUS/MergedAzShear_0-2kmAGL_00.50',
+        'bounds': [0.003, 0.005, 0.008, 0.012, 0.016, 0.020, 0.030, 0.040, 0.050],  # s^-1
+        'colors': [
+            '#00ff00',  # 0.003–0.005 s⁻¹ : bright green  (weak rotation)
+            '#80ff00',  # 0.005–0.008 s⁻¹ : yellow-green
+            '#ffff00',  # 0.008–0.012 s⁻¹ : yellow
+            '#ff8000',  # 0.012–0.016 s⁻¹ : orange
+            '#ff0000',  # 0.016–0.020 s⁻¹ : red
+            '#c00000',  # 0.020–0.030 s⁻¹ : dark red      (strong rotation)
+            '#ff00ff',  # 0.030–0.040 s⁻¹ : magenta
+            '#8000ff',  # 0.040–0.050 s⁻¹ : purple        (tornadic)
+        ],
+        # Raw GRIB2 values are integers in units of 10⁻³ s⁻¹ (e.g. raw 5 = 0.005 s⁻¹).
+        # Multiply by 0.001 to convert to s⁻¹ before applying bounds/min_val/max_val.
+        'conversion': 0.001,
+        # AzShear stores signed values (+ cyclonic, − anti-cyclonic).
+        # use_abs=True renders both directions on the same colour scale.
+        'use_abs': True,
+        'min_val': 0.002,   # s⁻¹ — below this is noise
+        'max_val': 1.0,     # s⁻¹ — generous cap; gross fills stripped earlier (>1e10)
+        'label': 'Azimuthal Shear (s\u207b\u00b9)',
+    },
+}
 
+# --- HRRR PRECIP TYPE (model-based, avoids radar artefacts) ---
 HRRR_BUCKET = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com"
 
 _hrrr_cache = {}  # cache key: YYYYMMDDHH string
 
 def _fetch_hrrr_vars_s3(date_str, hour_str, hours_back):
-    """
-    Download CRAIN/CSNOW/CICEP/CFRZR from the HRRR S3 archive using byte-range
-    requests derived from the companion .idx file.  Returns the local temp
-    filename on success, or raises on failure.
-    """
-    import cfgrib  # noqa: F401 – imported here to keep top-level imports light
+    import cfgrib  # noqa: F401
 
     base_url = (
         f"{HRRR_BUCKET}/hrrr.{date_str}/conus"
@@ -119,7 +225,6 @@ def _fetch_hrrr_vars_s3(date_str, hour_str, hours_back):
     if resp.status_code != 200:
         raise ValueError(f"idx fetch failed: HTTP {resp.status_code}")
 
-    # Parse .idx lines: "msgnum:byteoffset:d=YYYYMMDDHH:VARNAME:level:anl:"
     target_vars = {'CRAIN', 'CSNOW', 'CICEP', 'CFRZR'}
     lines = resp.text.strip().split('\n')
     ranges = []
@@ -130,15 +235,12 @@ def _fetch_hrrr_vars_s3(date_str, hour_str, hours_back):
         var_name = parts[3]
         if var_name in target_vars:
             start = int(parts[1])
-            # End byte = start of next message − 1 (last message: read to EOF)
             end = int(lines[i + 1].split(':')[1]) - 1 if i + 1 < len(lines) else ''
             ranges.append((var_name, start, end))
 
     if not ranges:
         raise ValueError("No CRAIN/CSNOW/CICEP/CFRZR found in .idx")
 
-    # Download each variable's byte range and concatenate into one GRIB2 file.
-    # GRIB2 is a message-based format so concatenation is safe.
     fname = f"hrrr_cat_{hours_back}.grib2"
     with open(fname, 'wb') as f_out:
         for var_name, start, end in ranges:
@@ -154,24 +256,16 @@ def _fetch_hrrr_vars_s3(date_str, hour_str, hours_back):
 
 
 def get_hrrr_precip_type(target_dt, tgt_lats_2d, tgt_lons_2d):
-    """
-    Fetch HRRR categorical precip type for our domain and regrid to the target
-    Mercator grid.  Returns a dict with boolean 2-D arrays:
-        {'rain': ..., 'snow': ..., 'ice': ...}
-    Returns None if HRRR is unavailable (caller falls back to MRMS PrecipFlag).
-    """
     try:
         from scipy.spatial import cKDTree
     except ImportError:
         return None
 
-    # Round to the nearest HRRR analysis hour for caching
     hrrr_hour_dt = target_dt.replace(minute=0, second=0, microsecond=0)
     cache_key = hrrr_hour_dt.strftime('%Y%m%d%H')
     if cache_key in _hrrr_cache:
         return _hrrr_cache[cache_key]
 
-    # Try the most recent available HRRR analysis, working back up to 2 h
     for hours_back in range(3):
         run_dt   = hrrr_hour_dt - timedelta(hours=hours_back)
         date_str = run_dt.strftime('%Y%m%d')
@@ -185,7 +279,6 @@ def get_hrrr_precip_type(target_dt, tgt_lats_2d, tgt_lons_2d):
             import cfgrib
             all_ds = cfgrib.open_datasets(fname, backend_kwargs={'indexpath': ''})
 
-            # Collect variable arrays and lat/lon from all datasets
             vmap = {}
             hrrr_lat = hrrr_lon = None
             for ds in all_ds:
@@ -207,11 +300,9 @@ def get_hrrr_precip_type(target_dt, tgt_lats_2d, tgt_lons_2d):
             cicep = vmap.get('cicep', zero)
             cfrzr = vmap.get('cfrzr', zero)
 
-            # Skip if all fields came back empty
             if not (np.any(crain) or np.any(csnow) or np.any(cicep) or np.any(cfrzr)):
                 continue
 
-            # Nearest-neighbour regrid: HRRR Lambert Conformal → our Mercator grid
             flat_lons = hrrr_lon.flatten()
             flat_lats = hrrr_lat.flatten()
             tree      = cKDTree(np.column_stack([flat_lons, flat_lats]))
@@ -301,8 +392,35 @@ def download_and_extract(key, filename):
         print(f" Failed: {e}")
         return False
 
-def process_frame(index, rate_key, flag_keys):
-    # Match rate and flag files by timestamp (YYYYMMDD-HHMM)
+def _get_mercator_grid():
+    """Return (width_px, height_px, target_lats, target_lons) for the standard grid."""
+    res_scale = 100
+    width_px  = int((LON_RIGHT - LON_LEFT) * res_scale)
+    merc_top  = lat_to_merc(LAT_TOP)
+    merc_bot  = lat_to_merc(LAT_BOT)
+    merc_height_ratio = (merc_top - merc_bot) / np.radians(LON_RIGHT - LON_LEFT)
+    height_px = int(width_px * merc_height_ratio)
+    target_y    = np.linspace(merc_top, merc_bot, height_px)
+    target_lats = merc_to_lat(target_y)
+    target_lons = np.linspace(LON_LEFT, LON_RIGHT, width_px)
+    return width_px, height_px, target_lats, target_lons
+
+def _parse_valid_time(ds, fallback_key):
+    """Extract valid_time from dataset, falling back to filename timestamp."""
+    try:
+        raw_time = ds.valid_time.values
+        if isinstance(raw_time, np.ndarray):
+            raw_time = raw_time.flat[0]
+        return datetime.fromtimestamp(
+            raw_time.astype('datetime64[s]').astype(int), tz=timezone.utc)
+    except Exception:
+        ts_part = fallback_key.split('_')[-1]
+        return datetime.strptime(
+            ts_part.split('.')[0], "%Y%m%d-%H%M%S"
+        ).replace(tzinfo=timezone.utc)
+
+def process_frame(rate_key, flag_keys):
+    """Process one precipitation rate frame and save as frame 0 (master.png)."""
     timestamp_part = rate_key.split('_')[-1]
     time_prefix    = timestamp_part[:13]
     flag_key       = next((k for k in flag_keys if time_prefix in k), None)
@@ -311,7 +429,7 @@ def process_frame(index, rate_key, flag_keys):
         print(f"  Skipping {time_prefix}: no matching flag file.")
         return
 
-    tmp_r, tmp_f = f"rate_{index}.grib2", f"flag_{index}.grib2"
+    tmp_r, tmp_f = "rate_0.grib2", "flag_0.grib2"
 
     try:
         if not download_and_extract(rate_key, tmp_r):
@@ -319,148 +437,70 @@ def process_frame(index, rate_key, flag_keys):
         if not download_and_extract(flag_key, tmp_f):
             return
 
-        # Load data
         ds_rate = xr.open_dataset(tmp_r, engine="cfgrib", backend_kwargs={'indexpath': ''})
         ds_flag = xr.open_dataset(tmp_f, engine="cfgrib", backend_kwargs={'indexpath': ''})
 
-        # Normalise coordinates to [-180, 180]
         for ds in [ds_rate, ds_flag]:
             ds.coords['longitude'] = ((ds.longitude + 180) % 360) - 180
         ds_rate = ds_rate.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
         ds_flag = ds_flag.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
 
-        # --- 1. RESOLUTION & MERCATOR GRID ---
-        # 100 pixels/degree matches the native 0.01° MRMS resolution
-        res_scale = 100
-        width_px  = int((LON_RIGHT - LON_LEFT) * res_scale)
-
-        merc_top          = lat_to_merc(LAT_TOP)
-        merc_bot          = lat_to_merc(LAT_BOT)
-        merc_height_ratio = (merc_top - merc_bot) / np.radians(LON_RIGHT - LON_LEFT)
-        height_px         = int(width_px * merc_height_ratio)
-
-        # Mercator-spaced Y values mapped back to latitude for interpolation
-        target_y    = np.linspace(merc_top, merc_bot, height_px)
-        target_lats = merc_to_lat(target_y)
-        target_lons = np.linspace(LON_LEFT, LON_RIGHT, width_px)
+        width_px, height_px, target_lats, target_lons = _get_mercator_grid()
 
         r_warp = ds_rate[list(ds_rate.data_vars)[0]].interp(
             latitude=target_lats, longitude=target_lons, method="nearest")
         f_warp = ds_flag[list(ds_flag.data_vars)[0]].interp(
             latitude=target_lats, longitude=target_lons, method="nearest")
 
-        rate_vals = r_warp.values   # mm/hr, float, NaN where no data
-        flag_vals = f_warp.values   # categorical integer
+        rate_vals = r_warp.values
+        flag_vals = f_warp.values
 
-        # --- 2. VALID TIME (needed for HRRR lookup) ---
-        try:
-            raw_time = ds_rate.valid_time.values
-            if isinstance(raw_time, np.ndarray):
-                raw_time = raw_time.flat[0]
-            utc_dt = datetime.fromtimestamp(
-                raw_time.astype('datetime64[s]').astype(int), tz=timezone.utc)
-        except Exception:
-            utc_dt = datetime.strptime(
-                timestamp_part.split('.')[0], "%Y%m%d-%H%M%S"
-            ).replace(tzinfo=timezone.utc)
-
-        # 2-D lat/lon grids for HRRR regridding (same shape as rate/flag)
+        utc_dt = _parse_valid_time(ds_rate, rate_key)
         tgt_lons_2d, tgt_lats_2d = np.meshgrid(target_lons, target_lats)
-
-        # --- 3. MASKS ---
-        # PrecipFlag categorical values:
-        #  1 = Rain (warm stratiform)
-        #  2 = Rain + hail / convective rain
-        #  3 = Snow
-        #  4 = Wet snow
-        #  5 = Sleet / ice pellets
-        #  6 = Freezing rain / drizzle
-        #  7 = Unknown / indeterminate type  → rain when measurable rate present
-        # 10 = No classification (bright-band artifact, chaff, etc.) → rain when rate present
-        # 91/96 = Multi-sensor / radar-only QPE rain estimates
-        rain = r_warp.where(f_warp.isin([1, 2, 91, 96]))
-        snow = r_warp.where(f_warp.isin([3, 4]))
-        ice  = r_warp.where(f_warp.isin([5, 6]))
 
         hrrr = get_hrrr_precip_type(utc_dt, tgt_lats_2d, tgt_lons_2d)
 
         if hrrr is not None:
             has_precip = rate_vals > 0.1
 
-            # Priority: rain > snow > ice (handles HRRR mixed-phase overlap)
             rain_mask = hrrr['rain'] & has_precip
             snow_mask = hrrr['snow'] & has_precip & ~hrrr['rain']
             ice_mask  = hrrr['ice']  & has_precip & ~hrrr['rain'] & ~hrrr['snow']
 
-            # Where HRRR shows no type but MRMS reports precip, fall back to
-            # MRMS PrecipFlag for those pixels so nothing is silently dropped.
             hrrr_typed = hrrr['rain'] | hrrr['snow'] | hrrr['ice']
             fallback   = has_precip & ~hrrr_typed
             if np.any(fallback):
                 rain_mask |= fallback & np.isin(flag_vals, [1, 2, 91, 96])
                 snow_mask |= fallback & np.isin(flag_vals, [3])
                 ice_mask  |= fallback & np.isin(flag_vals, [4, 5, 6])
-                # flag 7 (unknown) and 10 (no classification) with measurable rate
-                # are almost always rain inside storm interiors — include them.
                 rain_mask |= fallback & np.isin(flag_vals, [7, 10])
 
-            # MRMS radar-detected rain+hail (flag 2) is definitively not wintry:
-            # override HRRR ice/snow classification for those pixels.  The MRMS
-            # dual-pol algorithm directly identifies convective/hail signatures,
-            # which the HRRR model cannot reliably resolve.
             mrms_rain_hail = np.isin(flag_vals, [2]) & has_precip
             ice_mask  &= ~mrms_rain_hail
             snow_mask &= ~mrms_rain_hail
             rain_mask |=  mrms_rain_hail
 
-            # Catch-all: any pixel with measurable rate that still has no type
-            # (e.g. storm-interior holes where HRRR grid doesn't cover and the
-            # MRMS flag is something exotic) → rain.  This ensures storm cores
-            # never appear as transparent gaps.
             still_untyped = has_precip & ~(rain_mask | snow_mask | ice_mask)
             rain_mask |= still_untyped
 
         else:
-            # Fallback: MRMS PrecipFlag with enhanced safeguards
-            #
-            # Flag values:
-            #   1      = Rain (warm stratiform)
-            #   2      = Rain + hail / convective rain
-            #   3      = Snow (dry, pure)
-            #   4      = Wet snow  → classified as MIX, not snow.
-            #            Wet snow is a transitional melting-layer product that
-            #            is frequently triggered by melting hail and bright-band
-            #            contamination.  Other MRMS platforms show it as mix.
-            #   5      = Sleet / ice pellets
-            #   6      = Freezing rain / drizzle
-            #   7, 10  = Unknown / no classification — treated as rain when a
-            #            measurable rate exists (fills storm-interior gaps).
-            #  91, 96  = Multi-sensor / radar-only QPE rain estimates
             has_precip = rate_vals > 0.1
             rain_mask = np.isin(flag_vals, [1, 2, 91, 96])
-            snow_mask = np.isin(flag_vals, [3])           # pure dry snow only
-            ice_mask  = np.isin(flag_vals, [4, 5, 6])    # wet snow + sleet + frzr
-            # Pixels with a valid rate but unknown/unclassified flag → rain.
-            # This is the dominant cause of gaps inside convective storm cells.
+            snow_mask = np.isin(flag_vals, [3])
+            ice_mask  = np.isin(flag_vals, [4, 5, 6])
             untyped_with_rate = has_precip & np.isin(flag_vals, [7, 10])
             rain_mask |= untyped_with_rate
 
-        # --- 4. RATE SAFEGUARD (applied regardless of classification source) ---
-        # Real snow: typically < 5 mm/hr liquid equivalent.
-        # Real ice pellets: typically < 8 mm/hr.
-        # Anything above WINTRY_RATE_MAX is almost certainly misclassified
-        # hail or heavy convective rain.  Force those pixels into the rain layer.
-        high_rate  = rate_vals > WINTRY_RATE_MAX
+        high_rate  = rate_vals > WINTRY_RATE_MAX  # threshold in mm/hr (raw data)
         rain_mask |= (snow_mask | ice_mask) & high_rate
         snow_mask &= ~high_rate
         ice_mask  &= ~high_rate
 
-        # Build float arrays (NaN = transparent)
-        rain = np.where(rain_mask, rate_vals, np.nan)
-        snow = np.where(snow_mask, rate_vals, np.nan)
-        ice  = np.where(ice_mask,  rate_vals, np.nan)
+        # Convert mm/hr → in/hr for display; RAIN/SNOW/ICE_BOUNDS are in inches
+        rain = np.where(rain_mask, rate_vals * MM_TO_IN, np.nan)
+        snow = np.where(snow_mask, rate_vals * MM_TO_IN, np.nan)
+        ice  = np.where(ice_mask,  rate_vals * MM_TO_IN, np.nan)
 
-        # --- 5. PLOTTING ---
         fig = plt.figure(figsize=(width_px / 100, height_px / 100), dpi=100)
         ax  = fig.add_axes([0, 0, 1, 1], frameon=False)
         ax.set_axis_off()
@@ -472,69 +512,217 @@ def process_frame(index, rate_key, flag_keys):
         snow_cmap, snow_norm = get_cmap_norm('snow')
         ice_cmap,  ice_norm  = get_cmap_norm('ice')
 
-        # rain/snow/ice are already plain numpy arrays from np.where()
-        if np.any(rain > 0.1):
+        if np.any(rain > RAIN_BOUNDS[0]):
             ax.imshow(rain, cmap=rain_cmap, norm=rain_norm, **plot_args)
-        if np.any(snow > 0.1):
+        if np.any(snow > SNOW_BOUNDS[0]):
             ax.imshow(snow, cmap=snow_cmap, norm=snow_norm, **plot_args)
-        if np.any(ice > 0.1):
+        if np.any(ice > ICE_BOUNDS[0]):
             ax.imshow(ice,  cmap=ice_cmap,  norm=ice_norm,  **plot_args)
 
-        img_name = "master.png" if index == 0 else f"master_{index}.png"
-        plt.savefig(os.path.join(OUTPUT_DIR, img_name), transparent=True, pad_inches=0)
+        plt.savefig(os.path.join(OUTPUT_DIR, "master.png"), transparent=True, pad_inches=0)
         plt.close()
 
-        # --- 6. METADATA ---
         et_dt = utc_dt.astimezone(pytz.timezone('US/Eastern'))
         meta  = {
             "bounds": [[LAT_BOT, LON_LEFT], [LAT_TOP, LON_RIGHT]],
             "time":   et_dt.strftime("%I:%M %p ET"),
         }
-        with open(os.path.join(OUTPUT_DIR, f"metadata_{index}.json"), "w") as f:
+        with open(os.path.join(OUTPUT_DIR, "metadata_0.json"), "w") as f:
             json.dump(meta, f)
 
-        print(f"  Frame {index} saved: {meta['time']} ({width_px}x{height_px})")
+        print(f"  Precip rate frame 0 saved: {meta['time']} ({width_px}x{height_px})")
 
         ds_rate.close()
         ds_flag.close()
         gc.collect()
 
     except Exception as e:
-        print(f"  Error on frame {index}: {e}")
+        print(f"  Error on precip rate frame: {e}")
     finally:
         for f in [tmp_r, tmp_f]:
             if os.path.exists(f):
                 os.remove(f)
 
 
+def _open_grib2_dataset(tmp_file):
+    """Open a GRIB2 file with cfgrib, falling back to cfgrib.open_datasets for
+    non-standard MRMS products that xr.open_dataset can't handle as a single message."""
+    try:
+        ds = xr.open_dataset(tmp_file, engine="cfgrib", backend_kwargs={'indexpath': ''})
+        if len(ds.data_vars) == 0:
+            raise ValueError("empty dataset from xr.open_dataset")
+        return ds, None
+    except Exception as e_single:
+        # Some MRMS products (e.g. RotationTrack) have GRIB2 messages that cfgrib
+        # can't aggregate into one dataset — try open_datasets and merge the first.
+        try:
+            import cfgrib
+            all_ds = cfgrib.open_datasets(tmp_file, backend_kwargs={'indexpath': ''})
+            if not all_ds:
+                raise ValueError("cfgrib.open_datasets returned no datasets")
+            # Pick the dataset that has data variables
+            ds = next((d for d in all_ds if len(d.data_vars) > 0), None)
+            if ds is None:
+                raise ValueError("no data vars in any cfgrib dataset")
+            # Close the ones we're not using
+            for d in all_ds:
+                if d is not ds:
+                    try:
+                        d.close()
+                    except Exception:
+                        pass
+            return ds, all_ds
+        except Exception as e_multi:
+            raise RuntimeError(
+                f"cfgrib single-dataset failed ({e_single}); "
+                f"multi-dataset fallback also failed ({e_multi})"
+            )
+
+
+def process_single_field_frame(key, product_key, product_cfg):
+    """Download, process, and render one frame of a single-field MRMS product.
+
+    Saves output as {product_key}_0.png and metadata_{product_key}_0.json.
+    The GitHub Actions workflow shifts these to _1, _2, ... before each run,
+    maintaining a rolling NUM_FRAMES archive.
+    """
+    tmp_file = f"tmp_{product_key}.grib2"
+    all_ds_refs = None  # track extra cfgrib dataset refs for cleanup
+
+    try:
+        if not download_and_extract(key, tmp_file):
+            return
+
+        ds, all_ds_refs = _open_grib2_dataset(tmp_file)
+        ds.coords['longitude'] = ((ds.longitude + 180) % 360) - 180
+        ds = ds.sortby("latitude", ascending=False).sortby("longitude", ascending=True)
+
+        width_px, height_px, target_lats, target_lons = _get_mercator_grid()
+
+        warped = ds[list(ds.data_vars)[0]].interp(
+            latitude=target_lats, longitude=target_lons, method="nearest"
+        )
+        vals = warped.values.astype(float)
+
+        # Diagnostic: show raw data range before any processing
+        raw_finite = vals[np.isfinite(vals)]
+        if raw_finite.size > 0:
+            print(f"  {product_key} raw: min={raw_finite.min():.4g}, "
+                  f"max={raw_finite.max():.4g}, "
+                  f"non-fill pixels={raw_finite.size}")
+        else:
+            print(f"  {product_key} raw: all fill/NaN — file may be empty")
+
+        # Mask obvious GRIB2 fill values (±9.99e+20 and similar) before abs/conversion
+        vals[np.abs(vals) > 1e10] = np.nan
+
+        # For signed products (e.g. rotation track which stores both cyclonic +
+        # and anti-cyclonic − azimuthal shear), take the absolute value so that
+        # both rotation directions are rendered.
+        if product_cfg.get('use_abs', False):
+            vals = np.abs(vals)
+
+        # Apply unit conversion if specified (e.g. mm → inches for precip products)
+        conversion = product_cfg.get('conversion', 1.0)
+        if conversion != 1.0:
+            vals = vals * conversion
+
+        # Mask fill values and below-threshold values.
+        # min_val/max_val are in the same units as the (optionally converted) vals.
+        min_val = product_cfg['min_val']
+        max_val = product_cfg['max_val']
+        vals[(vals < min_val) | (vals > max_val)] = np.nan
+
+        n_valid = int(np.sum(~np.isnan(vals)))
+        print(f"  {product_key} after filtering [{min_val}, {max_val}]: "
+              f"{n_valid} valid pixels")
+
+        utc_dt = _parse_valid_time(ds, key)
+
+        cmap = ListedColormap(product_cfg['colors'])
+        norm = BoundaryNorm(product_cfg['bounds'], cmap.N)
+        cmap.set_bad(alpha=0)
+
+        fig = plt.figure(figsize=(width_px / 100, height_px / 100), dpi=100)
+        ax  = fig.add_axes([0, 0, 1, 1], frameon=False)
+        ax.set_axis_off()
+
+        extent    = [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP]
+        plot_args = dict(extent=extent, origin='upper', interpolation='none', aspect='auto')
+
+        if n_valid > 0:
+            ax.imshow(vals, cmap=cmap, norm=norm, **plot_args)
+
+        img_path  = os.path.join(OUTPUT_DIR, f"{product_key}_0.png")
+        meta_path = os.path.join(OUTPUT_DIR, f"metadata_{product_key}_0.json")
+
+        plt.savefig(img_path, transparent=True, pad_inches=0)
+        plt.close()
+
+        et_dt = utc_dt.astimezone(pytz.timezone('US/Eastern'))
+        meta  = {
+            "bounds": [[LAT_BOT, LON_LEFT], [LAT_TOP, LON_RIGHT]],
+            "time":   et_dt.strftime("%I:%M %p ET"),
+        }
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+
+        print(f"  {product_key} frame 0 saved: {meta['time']} ({width_px}x{height_px})")
+
+        ds.close()
+        gc.collect()
+
+    except Exception as e:
+        print(f"  Error processing {product_key}: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        if all_ds_refs:
+            for d in all_ds_refs:
+                try:
+                    d.close()
+                except Exception:
+                    pass
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
+
+
 if __name__ == "__main__":
     RATE_PREFIX = discover_rate_prefix()
     now_utc = datetime.now(timezone.utc)
 
-    processed_count = 0
-    # Check today (0) and yesterday (1) to handle midnight UTC rollovers
+    # --- Precipitation Rate: process only the single latest frame ---
+    print("=== Precipitation Rate ===")
+    precip_done = False
     for d in range(2):
-        date_str = (now_utc - timedelta(days=d)).strftime("%Y%m%d")
-        print(f"--- Checking Date: {date_str} ---")
-
+        date_str  = (now_utc - timedelta(days=d)).strftime("%Y%m%d")
         rate_keys = get_s3_keys(date_str, RATE_PREFIX)
         flag_keys = get_s3_keys(date_str, FLAG_PREFIX)
-
         if not rate_keys:
-            print("No keys found.")
+            print(f"  No rate keys for {date_str}.")
             continue
+        latest_rate_key = sorted(rate_keys)[-1]
+        print(f"  Latest key: {latest_rate_key}")
+        process_frame(latest_rate_key, flag_keys)
+        precip_done = True
+        break
+    if not precip_done:
+        print("  No precipitation rate data found.")
 
-        # Newest first
-        target_frames = sorted(rate_keys)[::-1][:NUM_FRAMES]
-        print(f"Processing {len(target_frames)} frames...")
-
-        for idx, r_key in enumerate(target_frames):
-            process_frame(idx, r_key, flag_keys)
-            processed_count += 1
-
-        if processed_count > 0:
-            print("Batch complete.")
+    # --- Single-field products: process only the single latest frame each ---
+    for product_key, product_cfg in SINGLE_PRODUCTS.items():
+        print(f"\n=== {product_cfg['label']} ===")
+        product_done = False
+        for d in range(2):
+            date_str = (now_utc - timedelta(days=d)).strftime("%Y%m%d")
+            keys     = get_s3_keys(date_str, product_cfg['prefix'])
+            if not keys:
+                print(f"  No keys for {date_str}.")
+                continue
+            latest_key = sorted(keys)[-1]
+            print(f"  Latest key: {latest_key}")
+            process_single_field_frame(latest_key, product_key, product_cfg)
+            product_done = True
             break
-
-    if processed_count == 0:
-        print("NO FRAMES PROCESSED.")
+        if not product_done:
+            print(f"  No data found for {product_key}.")
