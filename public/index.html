@@ -79,6 +79,34 @@
             background: rgba(0, 242, 255, 0.15); color: var(--accent);
             border-color: var(--accent);
         }
+
+        /* --- PIXEL INSPECTOR --- */
+        .pixel-popup .mapboxgl-popup-content {
+            background: rgba(10, 15, 25, 0.97);
+            border: 1px solid var(--accent);
+            border-radius: 10px;
+            padding: 10px 14px;
+            color: white;
+            font-family: 'Inter', sans-serif;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+            min-width: 110px;
+        }
+        .pixel-popup .mapboxgl-popup-close-button {
+            color: #aaa; font-size: 14px; padding: 4px 8px;
+        }
+        .pixel-popup .mapboxgl-popup-close-button:hover { color: #fff; }
+        .pixel-popup .mapboxgl-popup-tip { border-top-color: var(--accent) !important; }
+        .pixel-popup-content { display: flex; flex-direction: column; gap: 3px; }
+        .pixel-label {
+            font-size: 9px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 1px; color: #888;
+        }
+        .pixel-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 15px; color: var(--accent); font-weight: 600;
+        }
+        .pixel-nodata { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #555; }
+        .map-inspect { cursor: crosshair !important; }
     </style>
 </head>
 <body>
@@ -446,6 +474,115 @@
         setActiveBtn('[data-maptype]', `[data-maptype="${savedMapType}"]`);
 
         init();
+
+        // --- PIXEL INSPECTOR ---
+        const INSPECTABLE = ['mesh', 'qpe6h', 'qpe24h', 'lightning', 'rotation'];
+
+        // max_val must match SINGLE_PRODUCTS[key]['max_val'] in process_mrms.py.
+        // decimals: decimal places for the displayed exact value.
+        const PIXEL_TABLES = {
+            mesh:      { max_val: 8.0,   decimals: 2, unit: 'in',  label: 'Hail Size (MESH)' },
+            qpe6h:     { max_val: 40.0,  decimals: 2, unit: 'in',  label: '6-Hr Precip' },
+            qpe24h:    { max_val: 80.0,  decimals: 2, unit: 'in',  label: '24-Hr Precip' },
+            lightning: { max_val: 100.0, decimals: 0, unit: '%',   label: 'CG Lightning Prob' },
+            rotation:  { max_val: 1.0,   decimals: 4, unit: 's⁻¹', label: 'Az Shear' },
+        };
+
+        function latToMerc(lat) {
+            return Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+        }
+
+        const imgCache = {};
+        let pixelPopup = null;
+
+        async function loadImgToCanvas(url) {
+            if (imgCache[url]) return imgCache[url];
+            const img = await new Promise((res, rej) => {
+                const i = new Image();
+                i.crossOrigin = 'anonymous';
+                i.onload = () => res(i);
+                i.onerror = rej;
+                i.src = url;
+            });
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width; canvas.height = img.height;
+            canvas.getContext('2d').drawImage(img, 0, 0);
+            const keys = Object.keys(imgCache);
+            if (keys.length >= 15) delete imgCache[keys[0]];
+            imgCache[url] = canvas;
+            return canvas;
+        }
+
+        function updateInspectCursor() {
+            const el = map.getCanvas();
+            if (INSPECTABLE.includes(currentProduct)) el.classList.add('map-inspect');
+            else el.classList.remove('map-inspect');
+        }
+
+        async function inspectPixel(lngLat) {
+            if (!INSPECTABLE.includes(currentProduct)) return;
+            const frame = frames[currentIndex];
+            if (!frame) return;
+
+            if (isPlaying) togglePlay();
+
+            // Load the value PNG: {product}_val_{i}.png (R+G encode exact float)
+            const valUrl = frame.url.replace(/(_\d+\.png)(\?.*)?$/, '_val$1');
+            let canvas;
+            try {
+                canvas = await loadImgToCanvas(valUrl);
+            } catch (e) { return; } // val PNG not yet generated for this frame
+
+            // frame.bounds = [lonLeft, latBot, lonRight, latTop]
+            const [lonLeft, latBot, lonRight, latTop] = frame.bounds;
+            const mercTop = latToMerc(latTop);
+            const mercBot = latToMerc(latBot);
+            const mercCli = latToMerc(lngLat.lat);
+
+            const px = Math.round((lngLat.lng - lonLeft) / (lonRight - lonLeft) * canvas.width);
+            const py = Math.round((mercTop - mercCli) / (mercTop - mercBot) * canvas.height);
+
+            if (pixelPopup) { pixelPopup.remove(); pixelPopup = null; }
+            if (px < 0 || px >= canvas.width || py < 0 || py >= canvas.height) return;
+
+            const [r, g, b, a] = canvas.getContext('2d').getImageData(px, py, 1, 1).data;
+            const tbl = PIXEL_TABLES[currentProduct];
+
+            if (a < 15) {
+                pixelPopup = new mapboxgl.Popup({ closeButton: true, className: 'pixel-popup' })
+                    .setLngLat(lngLat)
+                    .setHTML(`<div class="pixel-popup-content"><span class="pixel-label">${tbl.label}</span><span class="pixel-nodata">No Data</span></div>`)
+                    .addTo(map);
+                return;
+            }
+
+            // Decode: val = uint16(R, G) / 65535 * max_val
+            const val = (((r << 8) | g) / 65535) * tbl.max_val;
+            const valText = `${val.toFixed(tbl.decimals)} ${tbl.unit}`;
+
+            pixelPopup = new mapboxgl.Popup({ closeButton: true, className: 'pixel-popup' })
+                .setLngLat(lngLat)
+                .setHTML(`<div class="pixel-popup-content"><span class="pixel-label">${tbl.label}</span><span class="pixel-value">${valText}</span></div>`)
+                .addTo(map);
+        }
+
+        map.on('click', (e) => inspectPixel(e.lngLat));
+
+        // Keep cursor updated when switching products
+        const _origSwitchProduct = switchProduct;
+        // Patch switchProduct to also update cursor and clear popup
+        const _patchedSwitchProduct = async (key) => {
+            if (pixelPopup) { pixelPopup.remove(); pixelPopup = null; }
+            Object.keys(imgCache).forEach(k => delete imgCache[k]);
+            await _origSwitchProduct(key);
+            updateInspectCursor();
+        };
+        document.querySelectorAll('[data-product]').forEach(btn => {
+            btn.onclick = () => _patchedSwitchProduct(btn.dataset.product);
+        });
+
+        map.on('load', updateInspectCursor);
+        setTimeout(updateInspectCursor, 500);
     </script>
 </body>
 </html>
