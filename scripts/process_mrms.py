@@ -579,10 +579,33 @@ def _open_grib2_dataset(tmp_file):
             )
 
 
+_INSPECTABLE_PRODUCTS = {'mesh', 'qpe6h', 'qpe24h', 'lightning', 'rotation'}
+
+
+def _save_value_png(vals, max_val, filepath):
+    """Encode a float array as a value PNG for exact browser pixel inspection.
+
+    Encoding: R = high byte, G = low byte of uint16(val / max_val * 65535).
+    Alpha = 255 for valid (finite, >0) pixels, 0 for NaN/missing.
+    Precision ≈ max_val / 65535.
+    """
+    valid = np.isfinite(vals) & (vals > 0)
+    h, w = vals.shape
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    if np.any(valid):
+        scaled = np.clip(vals[valid] / max_val * 65535, 0, 65535).astype(np.uint16)
+        rgba[valid, 0] = (scaled >> 8).astype(np.uint8)    # high byte → R
+        rgba[valid, 1] = (scaled & 0xFF).astype(np.uint8)  # low byte  → G
+        rgba[valid, 3] = 255                                # opaque
+    plt.imsave(filepath, rgba)
+
+
 def process_single_field_frame(key, product_key, product_cfg):
     """Download, process, and render one frame of a single-field MRMS product.
 
     Saves output as {product_key}_0.png and metadata_{product_key}_0.json.
+    For inspectable products also saves {product_key}_val_0.png with exact
+    float values encoded in R+G channels for browser pixel inspection.
     The GitHub Actions workflow shifts these to _1, _2, ... before each run,
     maintaining a rolling NUM_FRAMES archive.
     """
@@ -658,6 +681,11 @@ def process_single_field_frame(key, product_key, product_cfg):
 
         plt.savefig(img_path, transparent=True, pad_inches=0)
         plt.close()
+
+        if product_key in _INSPECTABLE_PRODUCTS and n_valid > 0:
+            val_path = os.path.join(OUTPUT_DIR, f"{product_key}_val_0.png")
+            _save_value_png(vals, max_val, val_path)
+            print(f"  {product_key} value PNG saved → {val_path}")
 
         et_dt = utc_dt.astimezone(pytz.timezone('US/Eastern'))
         meta  = {
