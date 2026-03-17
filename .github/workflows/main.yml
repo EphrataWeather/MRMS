@@ -55,6 +55,7 @@ jobs:
               next=$((i+1))
               [ -f "public/data/${product}_${i}.png" ]             && mv "public/data/${product}_${i}.png"             "public/data/${product}_${next}.png"             || true
               [ -f "public/data/metadata_${product}_${i}.json" ]   && mv "public/data/metadata_${product}_${i}.json"   "public/data/metadata_${product}_${next}.json"   || true
+              [ -f "public/data/${product}_val_${i}.png" ]         && mv "public/data/${product}_val_${i}.png"         "public/data/${product}_val_${next}.png"         || true
             done
           done
 
