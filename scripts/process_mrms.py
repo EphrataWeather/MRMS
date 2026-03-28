@@ -15,14 +15,14 @@ import pytz
 import gc
 
 # --- CONFIGURATION ---
-LAT_TOP, LAT_BOT = 50.0, 24.0
-LON_LEFT, LON_RIGHT = -130.0, -60.0
+LAT_TOP, LAT_BOT = 19.0, 17.0
+LON_LEFT, LON_RIGHT = -68, -65.0
 OUTPUT_DIR = "public/data"
 NUM_FRAMES = 15
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 BUCKET_URL = "https://noaa-mrms-pds.s3.amazonaws.com"
-FLAG_PREFIX = "CONUS/PrecipFlag_00.00"
+FLAG_PREFIX = "CARIB/PrecipFlag_00.00"
 
 # Physically-based rate cap for wintry precipitation (mm/hr liquid equivalent).
 # Real snowfall tops out ~5 mm/hr liquid; real ice pellets ~8 mm/hr.
@@ -89,7 +89,7 @@ def get_cmap_norm(p_type):
 # applying bounds/min_val/max_val. Use MM_TO_IN (1/25.4) for inch-display products.
 SINGLE_PRODUCTS = {
     'mesh': {
-        'prefix': 'CONUS/MESH_00.50',
+        'prefix': 'CARIB/MESH_00.50',
         'bounds': [0.25, 0.50, 0.75, 1.00, 1.50, 1.75, 2.00, 2.50, 3.00],  # inches hail diameter
         'colors': [
             '#c8f500',  # 0.25–0.50 in (~pea)     : lime-yellow
@@ -107,7 +107,7 @@ SINGLE_PRODUCTS = {
         'label': 'Max Estimated Hail Size (in)',
     },
     'qpe6h': {
-        'prefix': 'CONUS/RadarOnly_QPE_06H_00.00',
+        'prefix': 'CARIB/RadarOnly_QPE_06H_00.00',
         'bounds': [0.05, 0.25, 0.50, 1.00, 2.00, 3.00, 4.00, 6.00, 8.00],  # inches accumulated
         'colors': [
             '#00fb90',  # 0.05–0.25 in : mint
@@ -125,7 +125,7 @@ SINGLE_PRODUCTS = {
         'label': '6-Hour QPE (in)',
     },
     'qpe24h': {
-        'prefix': 'CONUS/RadarOnly_QPE_24H_00.00',
+        'prefix': 'CARIB/RadarOnly_QPE_24H_00.00',
         'bounds': [0.25, 1.00, 2.00, 3.00, 4.00, 6.00, 8.00, 12.00, 16.00],  # inches accumulated
         'colors': [
             '#00fb90',  # 0.25–1.00 in  : mint
@@ -143,7 +143,7 @@ SINGLE_PRODUCTS = {
         'label': '24-Hour QPE (in)',
     },
     'refl': {
-        'prefix': 'CONUS/MergedBaseReflectivity_00.50',
+        'prefix': 'CARIB/MergedBaseReflectivity_00.50',
         'bounds': [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 75],  # dBZ
         'colors': [
             '#646464',  # 0-5  dBZ : dark gray
@@ -166,7 +166,7 @@ SINGLE_PRODUCTS = {
         'label': 'Base Reflectivity (dBZ)',
     },
     'lightning': {
-        'prefix': 'CONUS/LightningProbabilityNext60minGrid_scale_1',
+        'prefix': 'CARIB/LightningProbabilityNext60minGrid_scale_1',
         'bounds': [5, 10, 20, 30, 40, 50, 60, 75, 90],  # percent probability
         'colors': [
             '#ffffb2',  # 5-10%  : pale yellow
@@ -183,7 +183,7 @@ SINGLE_PRODUCTS = {
         'label': '1-Hr CG Lightning Probability (%)',
     },
     'rotation': {
-        'prefix': 'CONUS/MergedAzShear_0-2kmAGL_00.50',
+        'prefix': 'CARIB/MergedAzShear_0-2kmAGL_00.50',
         'bounds': [0.003, 0.005, 0.008, 0.012, 0.016, 0.020, 0.030, 0.040, 0.050],  # s^-1
         'colors': [
             '#00ff00',  # 0.003–0.005 s⁻¹ : bright green  (weak rotation)
@@ -216,7 +216,7 @@ def _fetch_hrrr_vars_s3(date_str, hour_str, hours_back):
     import cfgrib  # noqa: F401
 
     base_url = (
-        f"{HRRR_BUCKET}/hrrr.{date_str}/conus"
+        f"{HRRR_BUCKET}/hrrr.{date_str}/CARIB"
         f"/hrrr.t{hour_str}z.wrfsfcf00.grib2"
     )
     idx_url = base_url + ".idx"
@@ -347,7 +347,7 @@ def get_hrrr_precip_type(target_dt, tgt_lats_2d, tgt_lons_2d):
 
 def discover_rate_prefix():
     print("Finding current Rate prefix...")
-    url = f"{BUCKET_URL}/?list-type=2&prefix=CONUS/&delimiter=/"
+    url = f"{BUCKET_URL}/?list-type=2&prefix=CARIB/&delimiter=/"
     try:
         r = session.get(url, timeout=10)
         root = ET.fromstring(r.content)
@@ -358,7 +358,7 @@ def discover_rate_prefix():
                     return p.rstrip("/")
     except:
         pass
-    return "CONUS/SurfacePrecipRate_00.00"
+    return "CARIB/SurfacePrecipRate_00.00"
 
 def get_s3_keys(date_str, prefix):
     url = f"{BUCKET_URL}/?list-type=2&prefix={prefix}/{date_str}/"
