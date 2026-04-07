@@ -143,7 +143,7 @@ SINGLE_PRODUCTS = {
         'label': '24-Hour QPE (in)',
     },
     'refl': {
-        'prefix': 'CONUS/MergedBaseReflectivityQC_00.50',
+        'prefix': 'CONUS/MergedBaseReflectivity_00.50',
         'bounds': [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 75],  # dBZ
         'colors': [
             '#646464',  # 0-5  dBZ : dark gray
