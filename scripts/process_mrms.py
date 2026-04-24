@@ -215,9 +215,10 @@ _hrrr_cache = {}  # cache key: YYYYMMDDHH string
 def _fetch_hrrr_vars_s3(date_str, hour_str, hours_back):
     import cfgrib  # noqa: F401
 
+    fhour_str = f"{hours_back:02d}"
     base_url = (
         f"{HRRR_BUCKET}/hrrr.{date_str}/CARIB"
-        f"/hrrr.t{hour_str}z.wrfsfcf00.grib2"
+        f"/hrrr.t{hour_str}z.wrfsfcf{fhour_str}.grib2"
     )
     idx_url = base_url + ".idx"
 
@@ -466,6 +467,14 @@ def process_frame(rate_key, flag_keys):
             rain_mask = hrrr['rain'] & has_precip
             snow_mask = hrrr['snow'] & has_precip & ~hrrr['rain']
             ice_mask  = hrrr['ice']  & has_precip & ~hrrr['rain'] & ~hrrr['snow']
+
+            # MRMS warm/tropical rain flags override any spurious HRRR wintry classification.
+            # Codes 1/2 = warm stratiform/convective rain; 10 = tropical rain; 96 = big drops.
+            # HRRR can produce erroneous CICEP/CFRZR flags in tropical environments.
+            mrms_warm_rain = np.isin(flag_vals, [1, 2, 10, 96]) & has_precip
+            rain_mask |=  mrms_warm_rain
+            snow_mask &= ~mrms_warm_rain
+            ice_mask  &= ~mrms_warm_rain
 
             hrrr_typed = hrrr['rain'] | hrrr['snow'] | hrrr['ice']
             fallback   = has_precip & ~hrrr_typed
