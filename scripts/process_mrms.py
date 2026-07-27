@@ -9,7 +9,8 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap, BoundaryNorm
+from contourpy import contour_generator, FillType
+from scipy.ndimage import gaussian_filter, maximum_filter
 from datetime import datetime, timezone, timedelta
 import pytz
 import gc
@@ -32,6 +33,29 @@ WINTRY_RATE_MAX = 15.0  # mm/hr (internal threshold, raw data units)
 
 # Unit conversion: all display values are in inches
 MM_TO_IN = 1.0 / 25.4
+
+# --- CONTOUR SMOOTHING ---
+# Every frame is published as smoothed filled contours instead of a pixel
+# raster: the field is coarsened, Gaussian-smoothed, and traced into filled
+# contour bands. The bands are written as GeoJSON polygons, so the browser
+# draws real vector shapes — they stay smooth at any zoom instead of breaking
+# up into image pixels, and only the fill is drawn (no contour outlines).
+#
+# Coarsening takes the block MAXIMUM rather than the mean: averaging a small,
+# intense echo against the empty background drags its peak below the lowest
+# colour bound and the feature disappears entirely.
+SMOOTH_SIGMA      = 1.5  # Gaussian sigma, in coarse-grid cells
+CONTOUR_DOWNSCALE = 2    # block-max factor applied before contouring
+SMOOTH_DILATE     = 1    # max-filter width (coarse cells) applied before blurring;
+                         # >1 keeps speckly fields from being blurred away
+
+# GeoJSON output tuning. Simplify tolerance and minimum polygon area are in
+# coarse cells (one coarse cell ≈ 2 km); the contours are already smoothed at
+# a larger scale than that, so simplification costs no visible detail while
+# cutting the payload by ~3x.
+GEOJSON_SIMPLIFY  = 0.25  # Douglas-Peucker tolerance, in coarse cells
+GEOJSON_MIN_AREA  = 1.0   # drop polygons smaller than this many coarse cells²
+GEOJSON_DECIMALS  = 4     # coordinate precision (~11 m)
 
 # --- SESSION SETUP ---
 session = requests.Session()
@@ -69,18 +93,166 @@ RAIN_COLORS = [
 SNOW_COLORS = ['#00ffff', '#80ffff', '#ffffff', '#adc5ff', '#5a82ff']
 ICE_COLORS  = ['#ff00ff', '#d100d1', '#910091', '#4b0082', '#2d004b']
 
-def get_cmap_norm(p_type):
-    if p_type == 'snow':
-        cmap = ListedColormap(SNOW_COLORS)
-        norm = BoundaryNorm(SNOW_BOUNDS, cmap.N)
-    elif p_type == 'ice':
-        cmap = ListedColormap(ICE_COLORS)
-        norm = BoundaryNorm(ICE_BOUNDS, cmap.N)
-    else:  # rain
-        cmap = ListedColormap(RAIN_COLORS)
-        norm = BoundaryNorm(RAIN_BOUNDS, cmap.N)
-    cmap.set_bad(alpha=0)  # NaN → fully transparent
-    return cmap, norm
+def _smooth_field(vals, floor, sigma=SMOOTH_SIGMA, downscale=CONTOUR_DOWNSCALE,
+                  dilate=SMOOTH_DILATE):
+    """Coarsen and Gaussian-smooth a field so it can be contoured.
+
+    No-data cells (NaN) are replaced with `floor` — a value below the lowest
+    colour bound — so the smoothed field tapers away to nothing at the edge of
+    the echo rather than ending on a hard, blocky boundary.
+
+    Returns (grid, x, y) where x/y are the pixel coordinates of the coarse
+    cell centres on the original full-resolution grid.
+    """
+    grid = np.where(np.isfinite(vals), vals, floor).astype(np.float32)
+
+    d = max(1, int(downscale))
+    if d > 1:
+        h, w   = grid.shape
+        hc, wc = (h // d) * d, (w // d) * d
+        grid   = grid[:hc, :wc].reshape(hc // d, d, wc // d, d).max(axis=(1, 3))
+
+    if dilate > 1:
+        grid = maximum_filter(grid, size=int(dilate))
+
+    if sigma > 0:
+        grid = gaussian_filter(grid, sigma=sigma, mode='nearest')
+
+    x = (np.arange(grid.shape[1]) + 0.5) * d
+    y = (np.arange(grid.shape[0]) + 0.5) * d
+    return grid, x, y
+
+
+def _contour_levels(bounds, colors, min_val=None):
+    """Pick the contour levels and their fill colours.
+
+    `min_val` is the threshold the data was masked at. Below the first bound
+    it adds a sub-threshold sliver in the first colour, so near-threshold
+    pixels still show. Above it, the bands the data can never reach are
+    dropped so the smoothed halo cannot spill into them.
+
+    The returned colour list has one extra entry for the open-ended top band,
+    which reuses the top colour (what BoundaryNorm's over-colour did).
+    """
+    levels      = list(bounds)
+    fill_colors = list(colors)
+    if min_val is not None:
+        i = int(np.searchsorted(levels, min_val, side='right')) - 1
+        if i < 0:
+            levels      = [min_val] + levels
+            fill_colors = [fill_colors[0]] + fill_colors
+        elif 0 < i < len(fill_colors):
+            levels      = [max(min_val, levels[i])] + levels[i + 1:]
+            fill_colors = fill_colors[i:]
+    return levels, fill_colors + [fill_colors[-1]]
+
+
+def _simplify_ring(points, tol):
+    """Douglas-Peucker simplification of an (N, 2) ring, iteratively."""
+    n = len(points)
+    if n < 3 or tol <= 0:
+        return points
+    keep       = np.zeros(n, dtype=bool)
+    keep[0]    = keep[-1] = True
+    stack      = [(0, n - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b <= a + 1:
+            continue
+        seg    = points[a:b + 1]
+        p0, p1 = points[a], points[b]
+        dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+        length = np.hypot(dx, dy)
+        if length == 0:
+            dist = np.hypot(seg[:, 0] - p0[0], seg[:, 1] - p0[1])
+        else:
+            dist = np.abs(dx * (p0[1] - seg[:, 1]) -
+                          (p0[0] - seg[:, 0]) * dy) / length
+        i = int(np.argmax(dist))
+        if dist[i] > tol:
+            keep[a + i] = True
+            stack.append((a, a + i))
+            stack.append((a + i, b))
+    return points[keep]
+
+
+def contour_features(vals, bounds, colors, width_px, height_px,
+                     sigma=SMOOTH_SIGMA, dilate=SMOOTH_DILATE, min_val=None):
+    """Trace `vals` into smoothed filled contour bands as GeoJSON features.
+
+    Each feature is one band polygon (with holes) carrying its fill colour in
+    the 'c' property and the band's value range in 'v0'/'v1'.
+    """
+    levels, fill_colors = _contour_levels(bounds, colors, min_val)
+
+    # Background floor: one full colour band below the lowest level, so the
+    # smoothed halo around an echo drops out quickly instead of spreading the
+    # fill outward. Keyed off the first real band (not the optional min_val
+    # sliver, which can be far too narrow to separate data from background).
+    floor      = levels[0] - (bounds[1] - bounds[0])
+    grid, x, y = _smooth_field(vals, floor, sigma=sigma, dilate=dilate)
+
+    # Contour coordinates come back in full-resolution pixel space; convert to
+    # lon/lat. Rows are evenly spaced in Mercator Y, so the inverse Mercator
+    # gives back the true latitude of each row.
+    merc_top, merc_bot = lat_to_merc(LAT_TOP), lat_to_merc(LAT_BOT)
+
+    d        = max(1, int(CONTOUR_DOWNSCALE))
+    tol      = GEOJSON_SIMPLIFY * d      # tolerance in full-res pixels
+    min_area = GEOJSON_MIN_AREA * d * d
+
+    cg       = contour_generator(x=x, y=y, z=grid,
+                                 fill_type=FillType.ChunkCombinedOffsetOffset)
+    features = []
+    tops     = list(levels[1:]) + [np.inf]
+
+    for k, (lower, upper) in enumerate(zip(levels, tops)):
+        points_list, offsets_list, outer_list = cg.filled(lower, upper)[:3]
+        for pts, offsets, outer in zip(points_list, offsets_list, outer_list):
+            if pts is None:
+                continue
+            # `outer` groups rings into polygons: the first ring of each group
+            # is the exterior, the rest are its holes — the order GeoJSON wants.
+            for p in range(len(outer) - 1):
+                rings = []
+                for r in range(outer[p], outer[p + 1]):
+                    ring = pts[offsets[r]:offsets[r + 1]]
+                    if len(ring) < 4:
+                        continue
+                    rx, ry = ring[:, 0], ring[:, 1]
+                    area   = 0.5 * abs(np.dot(rx, np.roll(ry, 1)) -
+                                       np.dot(ry, np.roll(rx, 1)))
+                    if area < min_area:
+                        continue
+                    ring = _simplify_ring(ring, tol)
+                    if len(ring) < 4:
+                        continue
+                    ring[-1] = ring[0]  # simplification must not break closure
+                    lon = LON_LEFT + ring[:, 0] / width_px * (LON_RIGHT - LON_LEFT)
+                    lat = merc_to_lat(
+                        merc_top - ring[:, 1] / height_px * (merc_top - merc_bot))
+                    rings.append(np.stack([lon.round(GEOJSON_DECIMALS),
+                                           lat.round(GEOJSON_DECIMALS)], 1).tolist())
+                if rings:
+                    features.append({
+                        'type': 'Feature',
+                        'properties': {
+                            'c':  fill_colors[k],
+                            'v0': round(float(lower), 6),
+                            'v1': None if np.isinf(upper) else round(float(upper), 6),
+                        },
+                        'geometry': {'type': 'Polygon', 'coordinates': rings},
+                    })
+    return features
+
+
+def save_geojson(features, path):
+    """Write a FeatureCollection compactly (no spaces — these files are large)."""
+    with open(path, 'w') as f:
+        json.dump({'type': 'FeatureCollection', 'features': features}, f,
+                  separators=(',', ':'))
+    return os.path.getsize(path)
+
 
 # --- COLOR TABLES: SINGLE-FIELD PRODUCTS ---
 # Each entry: prefix, bounds (N+1 values for N color intervals), colors (N values),
@@ -104,6 +276,8 @@ SINGLE_PRODUCTS = {
         'min_val': 0.20,   # inches (~5 mm)
         'max_val': 8.0,    # inches (~200 mm fill-value cap)
         'conversion': MM_TO_IN,
+        # Hail swaths are narrow — smooth them lightly so they keep their shape.
+        'smooth_sigma': 1.0,
         'label': 'Max Estimated Hail Size (in)',
     },
     'qpe6h': {
@@ -203,6 +377,10 @@ SINGLE_PRODUCTS = {
         'use_abs': True,
         'min_val': 0.002,   # s⁻¹ — below this is noise
         'max_val': 1.0,     # s⁻¹ — generous cap; gross fills stripped earlier (>1e10)
+        # AzShear couplets are only a few pixels across and scattered; dilate
+        # before blurring so the smoothing doesn't erase them.
+        'smooth_sigma': 1.2,
+        'smooth_dilate': 2,
         'label': 'Azimuthal Shear (s\u207b\u00b9)',
     },
 }
@@ -440,7 +618,7 @@ def _parse_valid_time(ds, fallback_key):
         ).replace(tzinfo=timezone.utc)
 
 def process_frame(rate_key, flag_keys):
-    """Process one precipitation rate frame and save as frame 0 (master.png)."""
+    """Process one precipitation rate frame and save as frame 0 (master.geojson)."""
     timestamp_part = rate_key.split('_')[-1]
     time_prefix    = timestamp_part[:13]
     flag_key       = next((k for k in flag_keys if time_prefix in k), None)
@@ -510,26 +688,27 @@ def process_frame(rate_key, flag_keys):
         snow = np.where(snow_mask, rate_vals * MM_TO_IN, np.nan)
         ice  = np.where(ice_mask,  rate_vals * MM_TO_IN, np.nan)
 
-        fig = plt.figure(figsize=(width_px / 100, height_px / 100), dpi=100)
-        ax  = fig.add_axes([0, 0, 1, 1], frameon=False)
-        ax.set_axis_off()
+        # Anything the rate grid called precipitation (>0.1 mm/hr) should show,
+        # including rates just under the first colour bound.
+        rate_floor = 0.1 * MM_TO_IN  # in/hr
 
-        extent    = [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP]
-        plot_args = dict(extent=extent, origin='upper', interpolation='none', aspect='auto')
+        # Each precip type is contoured separately so the three colour tables
+        # stay independent. The masks are mutually exclusive, so the bands
+        # don't overlap; rain is emitted first, snow and ice paint over it
+        # wherever their smoothing halos meet.
+        features = []
+        for arr, arr_bounds, arr_colors in ((rain, RAIN_BOUNDS, RAIN_COLORS),
+                                            (snow, SNOW_BOUNDS, SNOW_COLORS),
+                                            (ice,  ICE_BOUNDS,  ICE_COLORS)):
+            if np.any(arr > arr_bounds[0]):
+                features += contour_features(arr, arr_bounds, arr_colors,
+                                             width_px, height_px,
+                                             min_val=rate_floor)
 
-        rain_cmap, rain_norm = get_cmap_norm('rain')
-        snow_cmap, snow_norm = get_cmap_norm('snow')
-        ice_cmap,  ice_norm  = get_cmap_norm('ice')
-
-        if np.any(rain > RAIN_BOUNDS[0]):
-            ax.imshow(rain, cmap=rain_cmap, norm=rain_norm, **plot_args)
-        if np.any(snow > SNOW_BOUNDS[0]):
-            ax.imshow(snow, cmap=snow_cmap, norm=snow_norm, **plot_args)
-        if np.any(ice > ICE_BOUNDS[0]):
-            ax.imshow(ice,  cmap=ice_cmap,  norm=ice_norm,  **plot_args)
-
-        plt.savefig(os.path.join(OUTPUT_DIR, "master.png"), transparent=True, pad_inches=0)
-        plt.close()
+        geo_path = os.path.join(OUTPUT_DIR, "master.geojson")
+        nbytes   = save_geojson(features, geo_path)
+        print(f"  Precip rate contours: {len(features)} polygons, "
+              f"{nbytes/1e6:.2f} MB")
 
         et_dt = utc_dt.astimezone(pytz.timezone('US/Eastern'))
         meta  = {
@@ -611,7 +790,7 @@ def _save_value_png(vals, max_val, filepath):
 def process_single_field_frame(key, product_key, product_cfg):
     """Download, process, and render one frame of a single-field MRMS product.
 
-    Saves output as {product_key}_0.png and metadata_{product_key}_0.json.
+    Saves output as {product_key}_0.geojson and metadata_{product_key}_0.json.
     For inspectable products also saves {product_key}_val_0.png with exact
     float values encoded in R+G channels for browser pixel inspection.
     The GitHub Actions workflow shifts these to _1, _2, ... before each run,
@@ -670,25 +849,22 @@ def process_single_field_frame(key, product_key, product_cfg):
 
         utc_dt = _parse_valid_time(ds, key)
 
-        cmap = ListedColormap(product_cfg['colors'])
-        norm = BoundaryNorm(product_cfg['bounds'], cmap.N)
-        cmap.set_bad(alpha=0)
-
-        fig = plt.figure(figsize=(width_px / 100, height_px / 100), dpi=100)
-        ax  = fig.add_axes([0, 0, 1, 1], frameon=False)
-        ax.set_axis_off()
-
-        extent    = [LON_LEFT, LON_RIGHT, LAT_BOT, LAT_TOP]
-        plot_args = dict(extent=extent, origin='upper', interpolation='none', aspect='auto')
-
+        features = []
         if n_valid > 0:
-            ax.imshow(vals, cmap=cmap, norm=norm, **plot_args)
+            features = contour_features(
+                vals, product_cfg['bounds'], product_cfg['colors'],
+                width_px, height_px,
+                sigma=product_cfg.get('smooth_sigma', SMOOTH_SIGMA),
+                dilate=product_cfg.get('smooth_dilate', SMOOTH_DILATE),
+                min_val=min_val,
+            )
 
-        img_path  = os.path.join(OUTPUT_DIR, f"{product_key}_0.png")
+        geo_path  = os.path.join(OUTPUT_DIR, f"{product_key}_0.geojson")
         meta_path = os.path.join(OUTPUT_DIR, f"metadata_{product_key}_0.json")
 
-        plt.savefig(img_path, transparent=True, pad_inches=0)
-        plt.close()
+        nbytes = save_geojson(features, geo_path)
+        print(f"  {product_key} contours: {len(features)} polygons, "
+              f"{nbytes/1e6:.2f} MB")
 
         if product_key in _INSPECTABLE_PRODUCTS and n_valid > 0:
             val_path = os.path.join(OUTPUT_DIR, f"{product_key}_val_0.png")
